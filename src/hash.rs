@@ -1,0 +1,226 @@
+//! Domain-tagged hashing.
+//!
+//! Jevil uses two random-oracle-modelled primitives:
+//!
+//! - [`Family::Arith`]: **Poseidon2-Goldilocks-12** (state width 12, rate 8,
+//!   capacity 4, S-box `x⁷`). Arithmetic-friendly, used *only* inside WHIR for
+//!   its codeword vector commitment.
+//! - [`Family::Xof`]: **SHAKE256** (extendable-output). Used for seed
+//!   expansion, mask derivation, position derivation, and Fiat–Shamir.
+//!
+//! Every hash invocation is prefixed by an 8-byte ASCII *domain tag* that
+//! separates the four logical uses. The tags are exposed as module-level
+//! constants below.
+//!
+//! ## Serialisation format
+//!
+//! `hash(family, tag, [x₁, x₂, …, xₖ]; L)` returns the first `L` output bytes
+//! of `family` applied to
+//!
+//! ```text
+//! tag ‖ len_8(x₁) ‖ x₁ ‖ len_8(x₂) ‖ x₂ ‖ … ‖ len_8(xₖ) ‖ xₖ
+//! ```
+//!
+//! where `len_8(x)` is the byte length of `x` encoded as an 8-byte
+//! little-endian unsigned integer. The length prefix is what makes the
+//! framing *injective*: concatenating two inputs of different lengths can
+//! never produce the same serialised buffer as concatenating two of any other
+//! lengths.
+
+use p3_field::{PrimeCharacteristicRing, PrimeField64};
+use p3_goldilocks::{Goldilocks, default_goldilocks_poseidon2_12};
+use p3_symmetric::Permutation;
+use shake::{ExtendableOutput, Shake256, Update, XofReader};
+
+// ---------------------------------------------------------------------------
+// Domain tags (paper §2.2)
+// ---------------------------------------------------------------------------
+
+/// Domain tag for the seed-derived honest polynomial coefficients (XOF).
+pub(crate) const JV_SEED: [u8; 8] = *b"JV-SEED\0";
+/// Domain tag for the seed-derived ZK mask coefficients (XOF).
+pub(crate) const JV_MASK: [u8; 8] = *b"JV-MASK\0";
+/// Domain tag for per-message position derivation (XOF).
+pub(crate) const JV_POSN: [u8; 8] = *b"JV-POSN\0";
+/// Domain tag for the Fiat–Shamir batching challenges (XOF).
+pub(crate) const JV_FSCH: [u8; 8] = *b"JV-FSCH\0";
+/// Domain tag for WHIR's internal vector commitment (Poseidon2).
+pub(crate) const JV_WHIR: [u8; 8] = *b"JV-WHIR\0";
+
+// ---------------------------------------------------------------------------
+// Hash family selector
+// ---------------------------------------------------------------------------
+
+/// Choice of hash primitive for [`hash`].
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub(crate) enum Family {
+	/// Poseidon2-Goldilocks-12 sponge (arithmetic-friendly).
+	Arith,
+	/// SHAKE256 extendable-output function.
+	Xof,
+}
+
+// ---------------------------------------------------------------------------
+// Length-prefixed domain-tagged hash
+// ---------------------------------------------------------------------------
+
+/// Hash a sequence of byte-string inputs with the chosen `family`, prefixing
+/// the canonical 8-byte domain `tag` and the length-prefix framing described
+/// in the module docs. Returns exactly `out_len` output bytes.
+pub(crate) fn hash(family: Family, tag: [u8; 8], inputs: &[&[u8]], out_len: usize) -> Vec<u8> {
+	let total = 8 + inputs.iter().map(|x| 8 + x.len()).sum::<usize>();
+	let mut buf = Vec::with_capacity(total);
+
+	buf.extend_from_slice(&tag);
+	for input in inputs {
+		buf.extend_from_slice(&(input.len() as u64).to_le_bytes());
+		buf.extend_from_slice(input);
+	}
+
+	match family {
+		Family::Arith => poseidon2_hash(&buf, out_len),
+		Family::Xof => shake256_hash(&buf, out_len),
+	}
+}
+
+// ---------------------------------------------------------------------------
+// SHAKE256
+// ---------------------------------------------------------------------------
+
+/// SHAKE256 of `input`, squeezing `out_len` bytes.
+fn shake256_hash(input: &[u8], out_len: usize) -> Vec<u8> {
+	let mut hasher = Shake256::default();
+	hasher.update(input);
+	let mut reader = hasher.finalize_xof();
+	let mut out = vec![0u8; out_len];
+	reader.read(&mut out);
+	out
+}
+
+// ---------------------------------------------------------------------------
+// Poseidon2-Goldilocks-12 sponge
+// ---------------------------------------------------------------------------
+
+/// Sponge state width (field elements).
+const POSEIDON2_WIDTH: usize = 12;
+/// Sponge rate in field elements (8 → 64 bytes per absorb).
+const POSEIDON2_RATE: usize = 8;
+/// Bytes per absorbed rate block.
+const POSEIDON2_RATE_BYTES: usize = POSEIDON2_RATE * 8;
+
+/// Sponge-hash `input` bytes with Poseidon2-Goldilocks-12, producing `out_len`
+/// bytes.
+///
+/// Padding: `"10*"` — append `0x01` then zero-pad to a multiple of
+/// `POSEIDON2_RATE_BYTES`.
+fn poseidon2_hash(input: &[u8], out_len: usize) -> Vec<u8> {
+	let perm = default_goldilocks_poseidon2_12();
+
+	let padded_len = {
+		let raw = input.len() + 1;
+		if raw.is_multiple_of(POSEIDON2_RATE_BYTES) {
+			raw
+		} else {
+			raw + (POSEIDON2_RATE_BYTES - raw % POSEIDON2_RATE_BYTES)
+		}
+	};
+	let mut padded = vec![0u8; padded_len];
+	padded[..input.len()].copy_from_slice(input);
+	padded[input.len()] = 0x01;
+
+	let mut state = [Goldilocks::ZERO; POSEIDON2_WIDTH];
+	for chunk in padded.chunks_exact(POSEIDON2_RATE_BYTES) {
+		for (i, elem_bytes) in chunk.chunks_exact(8).enumerate() {
+			state[i] += bytes_to_goldilocks(elem_bytes);
+		}
+		perm.permute_mut(&mut state);
+	}
+
+	let mut output = Vec::with_capacity(out_len);
+	loop {
+		for elem in &state[..POSEIDON2_RATE] {
+			output.extend_from_slice(&elem.as_canonical_u64().to_le_bytes());
+			if output.len() >= out_len {
+				output.truncate(out_len);
+				return output;
+			}
+		}
+		perm.permute_mut(&mut state);
+	}
+}
+
+/// Deserialise 8 little-endian bytes into a canonical `Goldilocks` element.
+#[inline]
+fn bytes_to_goldilocks(chunk: &[u8]) -> Goldilocks {
+	let raw = u64::from_le_bytes(chunk.try_into().unwrap());
+	let v = if raw >= Goldilocks::ORDER_U64 {
+		raw - Goldilocks::ORDER_U64
+	} else {
+		raw
+	};
+	Goldilocks::from_u64(v)
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	#[test]
+	fn arith_is_deterministic() {
+		let a = hash(Family::Arith, JV_WHIR, &[b"hello"], 32);
+		let b = hash(Family::Arith, JV_WHIR, &[b"hello"], 32);
+		assert_eq!(a, b);
+	}
+
+	#[test]
+	fn xof_is_deterministic() {
+		let a = hash(Family::Xof, JV_POSN, &[b"hello"], 32);
+		let b = hash(Family::Xof, JV_POSN, &[b"hello"], 32);
+		assert_eq!(a, b);
+	}
+
+	#[test]
+	fn domain_tags_separate() {
+		let a = hash(Family::Xof, JV_SEED, &[b"x"], 32);
+		let b = hash(Family::Xof, JV_MASK, &[b"x"], 32);
+		assert_ne!(a, b);
+	}
+
+	#[test]
+	fn families_separate() {
+		let a = hash(Family::Arith, JV_WHIR, &[b"x"], 32);
+		let b = hash(Family::Xof, JV_WHIR, &[b"x"], 32);
+		assert_ne!(a, b);
+	}
+
+	#[test]
+	fn variable_output_length() {
+		let a = hash(Family::Xof, JV_POSN, &[b"x"], 16);
+		let b = hash(Family::Xof, JV_POSN, &[b"x"], 64);
+		assert_eq!(a.len(), 16);
+		assert_eq!(b.len(), 64);
+		assert_eq!(&a[..], &b[..16]);
+	}
+
+	#[test]
+	fn length_prefix_is_injective_under_concat() {
+		// Without a length prefix, ("abcd", "ef") and ("abc", "def") would
+		// collide. With our framing they cannot.
+		let a = hash(Family::Xof, JV_POSN, &[b"abcd", b"ef"], 32);
+		let b = hash(Family::Xof, JV_POSN, &[b"abc", b"def"], 32);
+		assert_ne!(a, b);
+	}
+
+	#[test]
+	fn spec_tags_are_present() {
+		assert_eq!(&JV_SEED, b"JV-SEED\0");
+		assert_eq!(&JV_MASK, b"JV-MASK\0");
+		assert_eq!(&JV_POSN, b"JV-POSN\0");
+		assert_eq!(&JV_FSCH, b"JV-FSCH\0");
+		assert_eq!(&JV_WHIR, b"JV-WHIR\0");
+	}
+}
