@@ -4,7 +4,6 @@ use spongefish::domain_separator;
 
 use crate::field::{Goldilocks4, psi};
 use crate::keygen::SignerCache;
-use crate::lift::MonomialLift;
 use crate::params::Params;
 use crate::positions::derive_positions;
 use crate::transcript::{derive_betas, prefix_bytes};
@@ -80,8 +79,6 @@ pub fn sign(
 	msg: &[u8],
 ) -> Signature {
 	let k = Params::K as usize;
-	let nu = params.nu();
-	let nu_prime = params.nu_prime();
 	let t = params.t();
 	let m = params.m();
 	let n = params.n();
@@ -101,13 +98,24 @@ pub fn sign(
 	let betas = derive_betas(&pk.root, msg, &ys);
 
 	// 4. Materialise α = Σ_t β_t · u(x_t) as a length-N vector for the prover.
+	//    α[k] = Σ_t β_t · x_t^k for k ∈ [0, M); α[k] = 0 for k ∈ [M, N) (the
+	//    trailing zeros of u(x_t) at the r_zk slots — see [`crate::lift`]).
+	//    Computed directly via a parallel Horner pass over the K positions
+	//    rather than materialising each u(x_t) separately, which avoids the
+	//    K transient length-N allocations the old MonomialLift path used.
 	let mut alpha = vec![Goldilocks4::ZERO; n];
-	for (&x, &beta) in xs.iter().zip(betas.iter()) {
-		let u = MonomialLift::new(x, nu, nu_prime).materialize();
-		for (a, &uk) in alpha.iter_mut().zip(u.iter()) {
-			*a += beta * uk;
+	let mut x_powers = vec![Goldilocks4::ONE; xs.len()];
+	for slot in alpha.iter_mut().take(m) {
+		let mut sum = Goldilocks4::ZERO;
+		for t in 0..xs.len() {
+			sum += betas[t] * x_powers[t];
+		}
+		*slot = sum;
+		for t in 0..xs.len() {
+			x_powers[t] *= xs[t];
 		}
 	}
+	// alpha[m..n] stays zero by initialisation.
 
 	// 5. Build the Fiat–Shamir transcript with the deterministic prefix
 	//    binding (params, root, msg, ys) into its instance bytes — then run

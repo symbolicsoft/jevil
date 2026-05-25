@@ -19,19 +19,24 @@
 //!    `s_i_bc` (the fresh BC companion).
 //!
 //! Verifier checks:
-//! - Joint target: `⟨f*, coefficients⟩ + Σ_i α_i · ⟨ξ_i*_msg, sl_i⟩ = μ' +
-//!   γ_bc · joint_value` where `joint_value` is the running joint claim
-//!   (the sumcheck-final claim of the immediately-preceding IOR).
-//! - Main-code spot checks: `Enc_C(f*)[pos] = g[pos] + γ_bc · f[pos]`.
-//! - Per-mask spot checks: `Enc_{C_zk}(ξ_i*_msg, ξ_i*_r)[pos] =
-//!   s_i_bc[pos] + γ_bc · ξ_i[pos]`.
-//!
-//! The per-mask local target check (`sl_{o,i}·ξ_i* = μ_i' + γ_bc·μ_i`) of
-//! the canonical Construction 7.2 is intentionally elided in this
-//! specialisation — it would require carrying `μ_i` (the secret per-mask
-//! local target) through the IORs, which leaks information about the mask
-//! polynomials and defeats HVZK. The joint target check + codeword
-//! consistency together suffice for soundness.
+//! - **Per-mask local target check**:
+//!   `sl_{o,i}·ξ_i*_msg = μ_i' + γ_bc · μ_i_carry_in` for every carry-in
+//!   mask `i`. Binds the previously-published `μ_i` (carried on the
+//!   transcript from the prior IOR) to the Merkle-committed mask message;
+//!   combined with the per-mask codeword consistency check below, this
+//!   prevents an equivocating prover from lying about `μ_i` in the prior
+//!   IOR. HVZK is preserved: `μ_i` is a uniform-random field element
+//!   independent of the witness (sumcheck masks: `s_j(γ_j)` for fresh
+//!   random `s_j`; codeswitch padding masks: `Σ batch_rand · r'` for
+//!   fresh random `r'`).
+//! - **Joint target check**:
+//!   `⟨f*, coefficients⟩ + Σ_i α_i · ⟨ξ_i*_msg, sl_i⟩ = μ' + γ_bc · joint_value`
+//!   where `joint_value` is the running joint claim (the sumcheck-final
+//!   claim of the immediately-preceding IOR).
+//! - **Main-code spot checks**: `Enc_C(f*)[pos] = g[pos] + γ_bc · f[pos]`.
+//! - **Per-mask spot checks**: `Enc_{C_zk}(ξ_i*_msg, ξ_i*_r)[pos] =
+//!   s_i_bc[pos] + γ_bc · ξ_i[pos]` at shared sampled positions for every
+//!   mask in the stack.
 
 use spongefish::{ProverState, VerificationError, VerificationResult, VerifierState};
 

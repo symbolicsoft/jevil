@@ -7,75 +7,56 @@
 //! consumes the entire stack — opening each mask oracle and checking
 //! per-oracle codeword consistency.
 //!
-//! Two flavours of handle coexist in [`MaskOracleHandle`]: prover-side
-//! variants that own the message + encoding randomness + Merkle state,
-//! and a verifier-side variant that holds only the root (used to verify
-//! openings against the same root the prover committed to).
+//! Two flavours of handle coexist in [`MaskOracleHandle`]: a prover-side
+//! [`MaskOracleHandle::Prover`] variant that owns the message + encoding
+//! randomness + Merkle state (used for both sumcheck masks and codeswitch
+//! padding masks — the runtime shape is identical), and a verifier-side
+//! [`MaskOracleHandle::VerifierRootOnly`] variant that holds only the
+//! root (used to verify openings against the same root the prover
+//! committed to).
 
 use super::vc::{MerkleVc, Opening, VectorCommitment};
 use crate::field::Goldilocks4;
 
 /// Per-mask-oracle handle.
 ///
-/// Each variant carries the data the prover needs to open the oracle at
-/// base-case spot positions and to combine it into the joint linear form
-/// during code-switching. The verifier-side `VerifierRootOnly` variant
-/// reconstructs the same shape from only the committed root.
+/// The [`MaskOracleHandle::Prover`] variant carries everything the prover
+/// needs to open the oracle at base-case spot positions and to combine it
+/// into the joint linear form; it is used uniformly for both Construction
+/// 6.3 sumcheck masks and Construction 9.7 codeswitch padding masks (their
+/// runtime shape is identical — a `C_zk`-encoded message + Prop 3.19
+/// randomness + Merkle state). The [`MaskOracleHandle::VerifierRootOnly`]
+/// variant reconstructs the same shape from only the committed root.
 pub(crate) enum MaskOracleHandle {
-	/// A sumcheck mask `s_j` introduced by Construction 6.3 step 1.
-	SumcheckMask {
+	/// Prover-side handle: owns the message, encoding randomness, and Merkle
+	/// commit state. Used for both sumcheck masks and codeswitch padding
+	/// masks.
+	Prover {
 		msg: Vec<Goldilocks4>,
 		r: Vec<Goldilocks4>,
 		vc: MerkleVc,
 		vc_state: <MerkleVc as VectorCommitment>::CommitState,
-		#[allow(dead_code)] // Captured for the future simulator (Task 14); not yet read.
-		root: [u8; 32],
-	},
-	/// A randomness-padding mask `s` introduced by Construction 9.7 step 1.
-	/// Wired but not yet pushed by any round — Stage B activation.
-	#[allow(dead_code)]
-	CodeswitchPad {
-		msg: Vec<Goldilocks4>,
-		r: Vec<Goldilocks4>,
-		vc: MerkleVc,
-		vc_state: <MerkleVc as VectorCommitment>::CommitState,
-		root: [u8; 32],
 	},
 	/// Verifier-side handle: only the root is known.
 	VerifierRootOnly { root: [u8; 32] },
 }
 
 impl MaskOracleHandle {
-	pub(crate) fn new_sumcheck(
+	/// Construct a prover-side mask handle. Used by both the sumcheck IOR
+	/// (Construction 6.3, via [`super::sumcheck::prove_sumcheck_zk`]) and
+	/// the codeswitch IOR (Construction 9.7, via
+	/// [`super::protocol::ProverCodeswitch::prove`]).
+	pub(crate) fn new_prover(
 		msg: Vec<Goldilocks4>,
 		r: Vec<Goldilocks4>,
 		vc: MerkleVc,
 		vc_state: <MerkleVc as VectorCommitment>::CommitState,
-		root: [u8; 32],
 	) -> Self {
-		Self::SumcheckMask {
+		Self::Prover {
 			msg,
 			r,
 			vc,
 			vc_state,
-			root,
-		}
-	}
-
-	#[allow(dead_code)]
-	pub(crate) fn new_codeswitch_pad(
-		msg: Vec<Goldilocks4>,
-		r: Vec<Goldilocks4>,
-		vc: MerkleVc,
-		vc_state: <MerkleVc as VectorCommitment>::CommitState,
-		root: [u8; 32],
-	) -> Self {
-		Self::CodeswitchPad {
-			msg,
-			r,
-			vc,
-			vc_state,
-			root,
 		}
 	}
 
@@ -83,21 +64,10 @@ impl MaskOracleHandle {
 		Self::VerifierRootOnly { root }
 	}
 
-	/// The Merkle commitment root of the oracle. Available to both prover
-	/// and verifier sides.
-	#[allow(dead_code)] // Used by tests and future simulator (Task 14).
-	pub(crate) fn root(&self) -> [u8; 32] {
-		match self {
-			Self::SumcheckMask { root, .. }
-			| Self::CodeswitchPad { root, .. }
-			| Self::VerifierRootOnly { root } => *root,
-		}
-	}
-
 	/// Borrow the underlying message. Panics on the verifier-side variant.
 	pub(crate) fn message(&self) -> &[Goldilocks4] {
 		match self {
-			Self::SumcheckMask { msg, .. } | Self::CodeswitchPad { msg, .. } => msg,
+			Self::Prover { msg, .. } => msg,
 			Self::VerifierRootOnly { .. } => panic!("verifier handle has no message"),
 		}
 	}
@@ -105,7 +75,7 @@ impl MaskOracleHandle {
 	/// Borrow the encoding randomness. Panics on the verifier-side variant.
 	pub(crate) fn randomness(&self) -> &[Goldilocks4] {
 		match self {
-			Self::SumcheckMask { r, .. } | Self::CodeswitchPad { r, .. } => r,
+			Self::Prover { r, .. } => r,
 			Self::VerifierRootOnly { .. } => panic!("verifier handle has no randomness"),
 		}
 	}
@@ -114,9 +84,7 @@ impl MaskOracleHandle {
 	/// verifier-side variant (the verifier verifies, it does not open).
 	pub(crate) fn open(&self, positions: &[usize]) -> Opening<MerkleVc> {
 		match self {
-			Self::SumcheckMask { vc, vc_state, .. } | Self::CodeswitchPad { vc, vc_state, .. } => {
-				vc.open(vc_state, positions)
-			}
+			Self::Prover { vc, vc_state, .. } => vc.open(vc_state, positions),
 			Self::VerifierRootOnly { .. } => panic!("verifier handle cannot open"),
 		}
 	}
@@ -172,13 +140,14 @@ fn mask_codeword_len() -> usize {
 ///
 /// `alpha` is the running coefficient of this mask in the joint linear form:
 /// each subsequent sumcheck's combination randomness ε multiplies every
-/// carry-in mask's alpha. Initial alpha at push time: `2` for j < k and `1`
-/// for j = k (matching the closed-form `M_k(γ_k)` derivation in Construction
-/// 6.3).
+/// carry-in mask's alpha. Initial alpha at push time is `1` (the per-round
+/// `constant_adj_j` in `sumcheck.rs` absorbs the carry-in with weight 1
+/// regardless of `k`, so the final claim's mask contribution is
+/// `M_k(γ_k) = μ_1 + μ_2 + … + μ_k`).
 ///
-/// `target` is the per-oracle local target μ_i. For sumcheck masks pushed
-/// at protocol-internal points this is always 0 — the mask is freshly
-/// committed with no prior linear-functional commitment.
+/// `target` is the per-oracle local target μ_i. For sumcheck masks this is
+/// the prover-sent `s_j(γ_j)`; for codeswitch padding masks it is the
+/// prover-sent `sl_o · padding_msg`.
 pub(crate) struct MaskConstraint {
 	/// Coefficient of this mask in the joint linear form.
 	pub alpha: Goldilocks4,
@@ -199,14 +168,6 @@ impl MaskConstraint {
 			.zip(&self.sl_o_eval_point)
 			.map(|(a, b)| *a * *b)
 			.sum()
-	}
-
-	/// The per-oracle local target check `sl_{o,i}(st_{o,i}) · msg = μ_i`
-	/// for a candidate `msg`. Same as [`evaluate_sl`]; named separately for
-	/// readability at the spot where the local check is invoked.
-	#[allow(dead_code)]
-	pub fn local_target(&self, msg: &[Goldilocks4]) -> Goldilocks4 {
-		self.evaluate_sl(msg)
 	}
 }
 
@@ -231,12 +192,6 @@ impl MaskStack {
 
 	pub fn is_empty(&self) -> bool {
 		self.oracles.is_empty()
-	}
-
-	/// Iterate over `(mask, constraint)` pairs.
-	#[allow(dead_code)]
-	pub fn iter(&self) -> impl Iterator<Item = (&MaskOracleHandle, &MaskConstraint)> {
-		self.oracles.iter().zip(self.constraints.iter())
 	}
 
 	/// Multiply every existing mask's `alpha` by `epsilon`. Called at the
@@ -265,17 +220,7 @@ impl MaskStack {
 	) {
 		assert_eq!(masks.len(), gammas.len());
 		assert_eq!(masks.len(), targets.len());
-		let _k = masks.len();
 		for ((mask, gamma), target) in masks.into_iter().zip(gammas).zip(targets) {
-			// Per the actual HVZK sumcheck round-polynomial implementation
-			// (sumcheck.rs):
-			//     ĥ_round_j(γ_j) = sum_multiple_j · s_{j+1}(γ_j) + constant_adj_j
-			//                      + ε · q_round_j(γ_j)
-			// Tracing the constant_adj_j propagation, the FINAL claim's mask
-			// contribution is M_k(γ_k) = μ_1 + μ_2 + … + μ_k (all weights = 1,
-			// regardless of k). The (2, 2, …, 1) scaling derived directly from
-			// the paper's formula was off because the per-round constant_adj_j
-			// absorbs the carry-in mask values without further weighting.
 			let sl_o_eval_point = build_sumcheck_sl(gamma);
 			self.oracles.push(mask);
 			self.constraints.push(MaskConstraint {
@@ -295,9 +240,10 @@ impl MaskStack {
 		self.constraints.iter().map(|mc| mc.alpha * mc.target).sum()
 	}
 
-	/// Push one randomness-padding mask introduced by a code-switching round.
-	/// Used by Construction 9.7 (Stage B; not yet active).
-	#[allow(dead_code)]
+	/// Push one randomness-padding mask introduced by a code-switching round
+	/// (Construction 9.7). The caller patches `constraints.last_mut().target`
+	/// to the prover-sent `sl_o · padding_msg` value before relying on the
+	/// joint check.
 	pub fn push_padding_mask(
 		&mut self,
 		mask: MaskOracleHandle,
@@ -360,8 +306,6 @@ mod tests {
 		let targets = vec![g4(100), g4(200)];
 		stack.push_sumcheck_masks(masks, gammas, targets);
 		assert_eq!(stack.len(), 2);
-		assert_eq!(stack.oracles[0].root(), [1u8; 32]);
-		assert_eq!(stack.oracles[1].root(), [2u8; 32]);
 		// Per the actual HVZK round-polynomial: M_k(γ_k) = Σ μ_i with α_i = 1.
 		assert_eq!(stack.constraints[0].alpha, g4(1));
 		assert_eq!(stack.constraints[1].alpha, g4(1));
@@ -413,7 +357,6 @@ mod tests {
 			vec![g4(0); crate::params::Params::M_ZK - crate::params::Params::T_ZK],
 		);
 		assert_eq!(stack.len(), 1);
-		assert_eq!(stack.oracles[0].root(), [7u8; 32]);
 		assert_eq!(stack.constraints[0].alpha, g4(3));
 	}
 

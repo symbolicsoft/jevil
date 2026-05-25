@@ -54,7 +54,11 @@ impl MonomialLift {
 	}
 
 	/// Build the full length-`2^ν'` lift vector
-	/// `(1, x, x², …, x^{M-1}, 0, 0, …, 0)`.
+	/// `(1, x, x², …, x^{M-1}, 0, 0, …, 0)`. Used by unit tests as a
+	/// reference implementation against which the symbolic
+	/// [`MonomialLift::folded`] path is checked; production callers
+	/// (signer and verifier) never materialise a single lift directly.
+	#[allow(dead_code)]
 	pub(crate) fn materialize(&self) -> Vec<Goldilocks4> {
 		// Append-doubling: start with [1]; at step `j ∈ {1, …, ν'}`, multiply
 		// each new "right half" entry by `a_j = x^{2^{j-1}}` (or zero in the

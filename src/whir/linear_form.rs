@@ -109,30 +109,6 @@ impl<LFH: LinearFormHandle> LinearConstraint<LFH> {
 	}
 }
 
-/// A handle backed by an explicit length-`N` coefficient vector. Falls back
-/// to in-place folding via [`fold_evaluations`].
-#[allow(dead_code)] // exposed for completeness — unused by the Jevil verifier
-pub(crate) struct ExplicitLinearForm<F>(Vec<F>);
-
-#[allow(dead_code)]
-impl<F> ExplicitLinearForm<F> {
-	pub(crate) fn new(coefficients: Vec<F>) -> Self {
-		Self(coefficients)
-	}
-}
-
-impl<F: Field> LinearFormHandle for ExplicitLinearForm<F> {
-	type Alphabet = F;
-
-	fn form_size(&self) -> usize {
-		self.0.len()
-	}
-
-	fn folded_form(&self, rand: &[Self::Alphabet]) -> Vec<Self::Alphabet> {
-		fold_evaluations(self.0.clone(), rand)
-	}
-}
-
 /// A handle wrapping another handle that has already had some prefix of fold
 /// challenges applied, optionally also scaling the output by a constant
 /// factor. The scaling is used by the HVZK sumcheck (Construction 6.3) to

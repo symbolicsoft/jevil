@@ -32,7 +32,6 @@ pub(crate) mod evader;
 pub(crate) mod linear_form;
 pub(crate) mod mask_stack;
 pub(crate) mod protocol;
-pub(crate) mod simulator;
 pub(crate) mod sumcheck;
 pub(crate) mod transcript_io;
 pub(crate) mod vc;

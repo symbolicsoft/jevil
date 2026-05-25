@@ -177,12 +177,11 @@ impl ProverCodeswitch {
 		transcript.prover_message(&padding_target);
 
 		// Push the padding mask onto the stack with (α=1, sl_o, target=μ).
-		let padding_handle = super::mask_stack::MaskOracleHandle::new_sumcheck(
+		let padding_handle = super::mask_stack::MaskOracleHandle::new_prover(
 			padding_msg,
 			padding_r,
 			padding_vc,
 			padding_vc_state,
-			padding_root,
 		);
 		mask_stack.push_padding_mask(padding_handle, Goldilocks4::ONE, padding_sl_o);
 		// `push_padding_mask` leaves target=ZERO; patch it.

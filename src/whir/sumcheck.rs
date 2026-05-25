@@ -301,8 +301,8 @@ pub(crate) fn prove_sumcheck_zk(
 		let (s_j_root, s_j_state) = s_j_vc.commit(&s_j_leaves);
 		transcript.prover_message(&s_j_root);
 		mask_polys.push(s_j_poly);
-		mask_handles.push(MaskOracleHandle::new_sumcheck(
-			s_j_msg, s_j_r, s_j_vc, s_j_state, s_j_root,
+		mask_handles.push(MaskOracleHandle::new_prover(
+			s_j_msg, s_j_r, s_j_vc, s_j_state,
 		));
 	}
 
