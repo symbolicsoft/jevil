@@ -73,15 +73,15 @@
 //! The secret is a univariate polynomial `f ∈ F[X]` of degree `D = M − 1` over
 //! the quartic Goldilocks extension `F_{q_0^4}` (`|F| ≈ 2^256`), derived
 //! deterministically from a 32-byte seed `σ`. The public key is a zk-WHIR
-//! commitment to the length-`N` ZK-encoded coefficient vector `m = (c, r_zk)`
-//! where `c = (c_0, …, c_{M−1})` and `r_zk` is the Proposition 3.19 encoding
-//! randomness. A signature on a message `M` opens `f` at `K = 16`
-//! message-derived positions via a single batched zk-WHIR linear-form proof
-//! (Construction 6.3 sumcheck + Construction 7.2 base case). After
-//! `n_cliff = ⌈M/K⌉` signatures the outsider has accumulated ≥ `D + 1`
-//! distinct evaluations of `f` and reconstructs the secret by Lagrange
-//! interpolation.
-//!
+//! commitment to the length-`M` coefficient vector `c = (c_0, …, c_{M−1})`;
+//! the Proposition 3.19 encoding randomness is sampled inside `WHIR.Commit`
+//! from the same `σ` and never appears in the signer's user-facing API. A
+//! signature on a message `M` opens `f` at `K = 16` message-derived positions
+//! via a single batched zk-WHIR linear-form proof (Construction 6.3 sumcheck
+//! plus Construction 7.2 base case). After `n_cliff = ⌈M/K⌉` signatures the
+//! outsider has accumulated ≥ `D + 1` distinct evaluations of `f` and
+//! reconstructs the secret by Lagrange interpolation.
+//!  
 //! For the full construction and security analysis see the Jevil paper. For
 //! the per-construction compliance status against the zk-WHIR paper (ePrint
 //! 2026/391), see `docs/zkwhir-spec-compliance.md`.
@@ -138,9 +138,10 @@ pub use crate::verify::verify;
 /// the commit dimension `N`) from it.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PublicKey {
-	/// 32-byte zk-WHIR commitment root over `m = (c, r_zk) ∈ F^N`. Bound by
-	/// the cap-binding theorem (paper Theorem 11): every accepting opening
-	/// against this root reveals an evaluation of a degree-≤`D` polynomial.
+	/// 32-byte zk-WHIR commitment root over the coefficient vector
+	/// `c ∈ F^M`. Bound by the cap-binding theorem (paper Theorem 11):
+	/// every accepting opening against this root reveals an evaluation of
+	/// a degree-≤`D` polynomial.
 	pub root: [u8; 32],
 	/// Signing budget `n*` chosen at [`keygen`].
 	pub n_star: u32,
@@ -173,9 +174,9 @@ impl PublicKey {
 /// `s ← {0,1}^256`).
 ///
 /// The seed expands into the polynomial coefficients `c = (c_0, …, c_{M−1})`
-/// via the `JV-SEED` SHAKE256 stream and into the Prop. 3.19 encoding
-/// randomness `r_zk` (of length `N − M`) via the `JV-RZK` stream. Together
-/// they form the ZK-encoded commitment vector `m = (c, r_zk) ∈ F^N`.
+/// via the `JV-SEED` SHAKE256 stream and is also passed to `WHIR.Commit`,
+/// which uses the `JV-RZK` stream off the same seed to deterministically
+/// derive its internal Prop. 3.19 encoding randomness.
 ///
 /// `SecretKey` deliberately does **not** implement [`std::fmt::Debug`] or
 /// [`std::fmt::Display`] to discourage accidental logging. The inner bytes are

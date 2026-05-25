@@ -87,9 +87,8 @@ pub fn sign(
 	let positions = derive_positions(&pk.root, msg, k, t);
 	let xs: Vec<Goldilocks4> = positions.iter().map(|&i| psi(i as u64, t as u64)).collect();
 
-	// 2. y_t = f(x_t) via Horner over the M honest coefficients (the trailing
-	//    ZK-randomness entries of `m` are multiplied by zero in u(x); see
-	//    lift.rs).
+	// 2. y_t = f(x_t) via Horner over the M coefficients held in the first
+	//    M slots of `cache.m`.
 	let coeffs = &cache.m[..m];
 	let ys: Vec<Goldilocks4> = xs.iter().map(|&x| horner(coeffs, x)).collect();
 
@@ -97,12 +96,12 @@ pub fn sign(
 	//    `(root, msg, ys)`).
 	let betas = derive_betas(&pk.root, msg, &ys);
 
-	// 4. Materialise α = Σ_t β_t · u(x_t) as a length-N vector for the prover.
-	//    α[k] = Σ_t β_t · x_t^k for k ∈ [0, M); α[k] = 0 for k ∈ [M, N) (the
-	//    trailing zeros of u(x_t) at the r_zk slots — see [`crate::lift`]).
-	//    Computed directly via a parallel Horner pass over the K positions
-	//    rather than materialising each u(x_t) separately, which avoids the
-	//    K transient length-N allocations the old MonomialLift path used.
+	// 4. The lift `α = Σ_t β_t · u(x_t)` lives in `F^M`; we materialise it
+	//    here, embedded into the WHIR primitive's length-`N` wire format
+	//    (zero-padded over the WHIR encoding-randomness slots — see
+	//    `lift.rs` module docs for the embedding). Computed via a parallel
+	//    Horner pass over the K positions to avoid the K transient
+	//    length-N allocations the old MonomialLift path used.
 	let mut alpha = vec![Goldilocks4::ZERO; n];
 	let mut x_powers = vec![Goldilocks4::ONE; xs.len()];
 	for slot in alpha.iter_mut().take(m) {
@@ -115,7 +114,7 @@ pub fn sign(
 			x_powers[t] *= xs[t];
 		}
 	}
-	// alpha[m..n] stays zero by initialisation.
+	// alpha[m..n] stays zero by initialisation (WHIR-pad region).
 
 	// 5. Build the Fiat–Shamir transcript with the deterministic prefix
 	//    binding (params, root, msg, ys) into its instance bytes — then run

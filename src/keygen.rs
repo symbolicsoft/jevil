@@ -14,14 +14,16 @@ use crate::{PublicKey, SecretKey};
 
 /// Cached signer state held in memory after [`keygen`] for fast signing.
 ///
-/// The cache stores the ZK-encoded commitment vector `m = (c, r_zk) ∈ F^N`,
-/// where `c` is `f`'s coefficient vector (length `M`) and `r_zk` is the
-/// length-`(N − M)` Prop. 3.19 encoding randomness. The WHIR commit-and-open
-/// path constructs its own internal state fresh on each [`crate::sign`] call
-/// from `m`. A signer that has lost the cache can rebuild it from the
-/// [`SecretKey`] alone via [`SignerCache::from_secret`].
+/// The cache stores the length-`N` input vector required by the WHIR
+/// primitive: its first `M` slots hold `f`'s coefficients `c`, the trailing
+/// `N − M` slots hold the Prop. 3.19 encoding randomness that WHIR samples
+/// internally from the seed (`JV-RZK` tag, see [`crate::whir`]). The WHIR
+/// commit-and-open path constructs its own internal state fresh on each
+/// [`crate::sign`] call from this vector. A signer that has lost the cache
+/// can rebuild it from the [`SecretKey`] alone via
+/// [`SignerCache::from_secret`].
 ///
-/// `m` is *secret* material, so on drop we zeroize the vector contents.
+/// The vector is *secret* material, so on drop we zeroize its contents.
 pub struct SignerCache {
 	pub(crate) m: Vec<Goldilocks4>,
 }
@@ -45,9 +47,12 @@ impl SignerCache {
 /// Generate a fresh `(PublicKey, SecretKey, SignerCache)` triple from a CSPRNG.
 /// Realizes `Jevil.KeyGen` of the paper (`§3.3, Construction 4`).
 ///
-/// `rng` is consumed only to draw a 32-byte uniform `σ`; both `c` (from
-/// `JV-SEED`) and `r_zk` (from `JV-RZK`) are derived deterministically from
-/// `σ`. The same `(rng-state, params)` always produces the same public key.
+/// `rng` is consumed only to draw a 32-byte uniform `σ`: `c` (the
+/// polynomial coefficients) is derived from `σ` via `JV-SEED`, and the
+/// WHIR primitive consumes the same `σ` to deterministically derive its
+/// internal Prop. 3.19 encoding randomness via `JV-RZK` inside
+/// `WHIR.Commit`. The same `(rng-state, params)` always produces the same
+/// public key.
 pub fn keygen<R: RngCore + CryptoRng>(
 	rng: &mut R,
 	params: Params,
@@ -67,10 +72,17 @@ pub fn keygen<R: RngCore + CryptoRng>(
 	(pk, sk, cache)
 }
 
-/// Derive the ZK-encoded commitment vector `m = (c, r_zk)` of length `N`
-/// from a 32-byte seed. The first `M` entries are `f`'s coefficients
-/// (`JV-SEED` stream); the next `N − M` are Prop. 3.19 encoding randomness
-/// (`JV-RZK` stream).
+/// Build the length-`N` input vector that the WHIR primitive expects from
+/// a 32-byte seed. The first `M` slots are `f`'s coefficients `c` (drawn
+/// from the `JV-SEED` stream); the trailing `N − M` slots are the
+/// Prop. 3.19 encoding randomness that `WHIR.Commit` would otherwise
+/// sample internally (drawn from the `JV-RZK` stream, matching the
+/// derivation the primitive performs).
+///
+/// At the paper-level abstraction the signer passes only `c` and `σ` to
+/// `WHIR.Commit`; this helper does the concatenation locally because our
+/// in-tree WHIR primitive takes the assembled length-`N` vector at its
+/// wire format. The split is invisible above this function.
 pub(crate) fn derive_commit_vector(
 	sigma: &[u8; SecretKey::BYTES],
 	params: Params,
@@ -151,7 +163,7 @@ mod tests {
 	}
 
 	#[test]
-	fn commit_vector_seed_and_rzk_streams_differ() {
+	fn commit_vector_coefficient_and_whir_randomness_streams_differ() {
 		let params = Params::new(3);
 		let sigma = [99u8; 32];
 		let m = derive_commit_vector(&sigma, params);

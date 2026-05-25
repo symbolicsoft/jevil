@@ -1,26 +1,34 @@
 //! The monomial-basis lift `u(x)` and its multilinear-extension folding.
 //!
-//! The Jevil commitment vector `m = (c, r_zk) ∈ F^N` carries `f`'s
-//! `M`-coefficient vector `c` followed by `N − M` ZK encoding-randomness
-//! entries. The lift
+//! The lift is the length-`M` vector
 //!
 //! ```text
-//! u(x) := (1, x, x², …, x^{M-1}, 0, 0, …, 0)  ∈ F^N,
+//! u(x) := (1, x, x², …, x^{M-1})  ∈ F^M,
 //! ```
 //!
-//! is the length-`N` vector whose inner product with `m` selects only the
-//! first `M` entries: `⟨m, u(x)⟩ = f(x)`, independent of `r_zk`. With
-//! LSB-first storage the multilinear extension factors as
+//! whose inner product with the coefficient vector `c ∈ F^M` is the
+//! polynomial evaluation `⟨c, u(x)⟩ = f(x)`. The MLE of `u(x)` on
+//! `{0,1}^ν` (with `M = 2^ν`, LSB-first storage) factors as
 //!
 //! ```text
-//! u(x)(s₁, …, s_{ν'}) = ∏_{j=1}^{ν} F_j(s_j) · ∏_{j=ν+1}^{ν'} (1 − s_j)
-//!              F_j(s) = 1 − s + s · x^{2^{j-1}}.
+//! u(x)(s₁, …, s_ν) = ∏_{j=1}^{ν} F_j(s_j),   F_j(s) = 1 − s + s · x^{2^{j-1}}.
 //! ```
 //!
-//! This module exposes [`MonomialLift`], which can either materialise the
-//! length-`N` vector ([`MonomialLift::materialize`]) or compute its
-//! sumcheck-folded form ([`MonomialLift::folded`]) in `O(ν')` instead of
-//! `O(N)`. The verifier uses the latter via [`crate::alpha::BatchedAlpha`]
+//! ## Embedding into the WHIR primitive's `F^N` namespace
+//!
+//! The underlying WHIR primitive (`crate::whir`) operates on length-`N`
+//! coefficient vectors, where `N = 2^ν' ≥ M` is the Prop. 3.19 ZK-encoded
+//! message length the primitive uses internally to attach its encoding
+//! randomness. The length-`M` lift is embedded into the length-`N`
+//! namespace by zero-padding the trailing `N − M` coordinates; this is
+//! purely a wire-format step at the WHIR API boundary and is invisible to
+//! the lift's user-facing semantics. The MLE on `{0,1}^{ν'}` picks up one
+//! extra factor `∏_{j=ν+1}^{ν'} (1 − s_j)` from the zero-padding region.
+//!
+//! [`MonomialLift`] materialises either the length-`M` lift
+//! ([`MonomialLift::materialize`]) or its `ν'`-variable WHIR-embedded
+//! folded form ([`MonomialLift::folded`]) in `O(ν')` instead of `O(N)`.
+//! The verifier uses the folded form via [`crate::alpha::BatchedAlpha`]
 //! to avoid materialising any length-`N` vector.
 
 use crate::field::Goldilocks4;
@@ -53,16 +61,21 @@ impl MonomialLift {
 		}
 	}
 
-	/// Build the full length-`2^ν'` lift vector
-	/// `(1, x, x², …, x^{M-1}, 0, 0, …, 0)`. Used by unit tests as a
-	/// reference implementation against which the symbolic
-	/// [`MonomialLift::folded`] path is checked; production callers
-	/// (signer and verifier) never materialise a single lift directly.
+	/// Build the WHIR-embedded length-`2^ν'` form of the lift,
+	/// `(1, x, x², …, x^{M-1}, 0, 0, …, 0)`. The leading `M = 2^ν` slots
+	/// are the lift proper; the trailing `2^ν' − M` slots are the
+	/// zero-padding by which the lift embeds into the WHIR primitive's
+	/// length-`N` namespace (`lift.rs` module docs).
+	///
+	/// Used by unit tests as a reference implementation against which the
+	/// symbolic [`MonomialLift::folded`] path is checked; production
+	/// callers (signer and verifier) never materialise a single lift
+	/// directly.
 	#[allow(dead_code)]
 	pub(crate) fn materialize(&self) -> Vec<Goldilocks4> {
 		// Append-doubling: start with [1]; at step `j ∈ {1, …, ν'}`, multiply
 		// each new "right half" entry by `a_j = x^{2^{j-1}}` (or zero in the
-		// ZK-randomness region).
+		// WHIR zero-pad region for j > ν).
 		let mut v = vec![Goldilocks4::ONE];
 		for j in 1..=self.nu_prime as usize {
 			let a_j = if (j as u32) <= self.nu {
@@ -153,13 +166,13 @@ mod tests {
 	}
 
 	#[test]
-	fn materialize_zero_on_zk_region() {
+	fn materialize_zero_on_whir_pad_region() {
 		let lift = MonomialLift::new(g(7), 3, 5);
 		let v = lift.materialize();
 		assert_eq!(v.len(), 32);
 		for (k, val) in v.iter().enumerate() {
 			if k >= 8 {
-				assert!(val.is_zero(), "zk-region position {k} should be zero");
+				assert!(val.is_zero(), "WHIR-pad position {k} should be zero");
 			}
 		}
 	}

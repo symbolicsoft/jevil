@@ -141,22 +141,22 @@ impl Params {
 	/// queries to the public-key codeword.
 	pub const Q_MAX: u64 = 512;
 
-	/// `N = 2^ν'` — the committed length, including ZK encoding randomness
-	/// per Prop. 3.19 of eprint 2026/391. The public key commits to
-	/// `Enc_C(c, r_zk)` with `|c| = M` and `|r_zk| = N − M`. We size
-	/// `|r_zk| ≥ n* · Q_MAX` so that the cumulative F-linear functionals
-	/// across all `n*` signatures are absorbed by the encoding randomness
-	/// — i.e. perfect honest-verifier ZK across the full signing budget.
+	/// `N = 2^ν'` — the WHIR primitive's internal ZK-encoded message
+	/// length per Prop. 3.19 of eprint 2026/391. The primitive samples
+	/// the trailing `N − M` slots as encoding randomness (the HVZK
+	/// budget); we size that budget so the cumulative F-linear
+	/// functionals across all `n*` signatures are absorbed by it — i.e.
+	/// perfect honest-verifier ZK across the full signing budget.
 	pub fn nu_prime(&self) -> u32 {
 		let total = self.m() as u64 + (self.n_star as u64).saturating_mul(Self::Q_MAX);
 		// At least `M + Q_MAX` so a single-signature deployment still has
-		// nontrivial encoding randomness.
+		// nontrivial HVZK budget.
 		let total = total.max(self.m() as u64 + Self::Q_MAX);
 		ceil_log2_u64(total)
 	}
 
-	/// `N = 2^ν'`. Length of the ZK-encoded coefficient vector that gets
-	/// WHIR-committed.
+	/// `N = 2^ν'`. The WHIR primitive's internal ZK-encoded message
+	/// length (`M` data slots + `N − M` HVZK budget slots).
 	pub fn n(&self) -> usize {
 		1usize << self.nu_prime()
 	}
@@ -203,7 +203,7 @@ mod tests {
 		assert_eq!(p.m(), 1 << 14);
 		assert_eq!(p.d(), (1 << 14) - 1);
 		assert_eq!(p.n_cliff(), 1024);
-		// |r_zk| ≥ 1023 · 512 ≈ 524K ⇒ N ≥ 16K + 524K ≈ 2^20.
+		// HVZK budget ≥ 1023 · 512 ≈ 524K ⇒ N ≥ 16K + 524K ≈ 2^20.
 		assert_eq!(p.nu_prime(), 20);
 		assert_eq!(p.n(), 1 << 20);
 	}

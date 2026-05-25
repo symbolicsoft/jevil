@@ -1,8 +1,11 @@
 //! The batched linear form `α = Σ_t β_t · u(x_t)` used by the verifier.
 //!
 //! Implements [`crate::whir::LinearFormHandle`] symbolically so the verifier
-//! never materialises the length-`N` α vector. The fold is computed
-//! per-`MonomialLift` and then linearly combined with the `β_t` weights.
+//! never materialises the (WHIR-embedded) length-`N` α vector. The fold is
+//! computed per-`MonomialLift` and then linearly combined with the `β_t`
+//! weights. `BatchedAlpha` is logically a length-`M` form (just `Σ_t β_t
+//! u(x_t)`); the length-`N` form_size it reports is the embedding into the
+//! WHIR primitive's wire format (see `lift.rs` module docs).
 
 use crate::field::Goldilocks4;
 use crate::lift::MonomialLift;
@@ -109,7 +112,7 @@ mod tests {
 	}
 
 	#[test]
-	fn alpha_value_independent_of_zk_region() {
+	fn alpha_value_independent_of_whir_pad_region() {
 		let nu = 3u32;
 		let nu_prime = 5u32;
 		let m = 1usize << nu;
@@ -120,8 +123,10 @@ mod tests {
 		let alpha_vec = alpha.folded_form(&[]);
 		assert_eq!(alpha_vec.len(), n);
 
-		// Two commit vectors that agree on the first M entries but differ in
-		// the ZK-randomness region must produce the same inner product.
+		// Two WHIR-embedded vectors that agree on the first M entries (the
+		// coefficient vector) but differ in the trailing WHIR-pad region
+		// (the encoding-randomness slots) must produce the same inner
+		// product.
 		let mut m_a = vec![g(0); n];
 		let mut m_b = vec![g(0); n];
 		for k in 0..m {
