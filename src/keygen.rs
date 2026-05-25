@@ -5,7 +5,7 @@ use std::sync::Arc;
 use rand::{CryptoRng, RngCore};
 
 use crate::field::Goldilocks4;
-use crate::hash::{Family, JV_SEED, hash};
+use crate::hash::{Family, JV_RZK, JV_SEED, hash};
 use crate::params::Params;
 use crate::whir::code::{InterleavedCode, ReedSolomon};
 use crate::whir::commitment::CodeCommitment;
@@ -14,45 +14,39 @@ use crate::{PublicKey, SecretKey};
 
 /// Cached signer state held in memory after [`keygen`] for fast signing.
 ///
-/// The cache stores the coefficient vector `c`. The WHIR commit-and-open path
-/// constructs its own internal state fresh on each [`crate::sign`] call from
-/// `c`. A signer that has lost the cache can rebuild it from the
-/// [`SecretKey`] alone via [`SignerCache::from_secret`] — at the cost of
-/// re-running the deterministic-derivation step.
+/// The cache stores the ZK-encoded commitment vector `m = (c, r_zk) ∈ F^N`,
+/// where `c` is `f`'s coefficient vector (length `M`) and `r_zk` is the
+/// length-`(N − M)` Prop. 3.19 encoding randomness. The WHIR commit-and-open
+/// path constructs its own internal state fresh on each [`crate::sign`] call
+/// from `m`. A signer that has lost the cache can rebuild it from the
+/// [`SecretKey`] alone via [`SignerCache::from_secret`].
 ///
-/// `c` is *secret* material (it is `f`'s coefficient vector), so on drop we
-/// zeroize the vector contents via [`zeroize::Zeroize`].
+/// `m` is *secret* material, so on drop we zeroize the vector contents.
 pub struct SignerCache {
-	pub(crate) c: Vec<Goldilocks4>,
+	pub(crate) m: Vec<Goldilocks4>,
 }
 
 impl Drop for SignerCache {
 	fn drop(&mut self) {
 		use zeroize::Zeroize;
-		self.c.zeroize();
+		self.m.zeroize();
 	}
 }
 
 impl SignerCache {
 	/// Rebuild the cache from the secret seed and the public-key parameters.
-	/// Produces the exact same `c` (and therefore the same `PublicKey`) as
-	/// the original [`keygen`] call.
 	pub fn from_secret(sk: &SecretKey, params: Params) -> Self {
 		Self {
-			c: derive_c(sk.seed(), params),
+			m: derive_commit_vector(sk.seed(), params),
 		}
 	}
 }
 
-/// Generate a fresh `(PublicKey, SecretKey, SignerCache)` triple from a
-/// cryptographically-strong RNG.
+/// Generate a fresh `(PublicKey, SecretKey, SignerCache)` triple from a CSPRNG.
 ///
-/// `rng` is consumed only to draw a single 32-byte uniform `σ`; all
-/// subsequent randomness is derived deterministically from `σ` via the
-/// `JV-SEED` SHAKE256 stream. The same `(rng-state, params)` always produces
-/// the same public key — useful for testing, but consequential for
-/// production: re-seeding the RNG identically will re-derive the same
-/// signing key.
+/// `rng` is consumed only to draw a 32-byte uniform `σ`; both `c` (from
+/// `JV-SEED`) and `r_zk` (from `JV-RZK`) are derived deterministically from
+/// `σ`. The same `(rng-state, params)` always produces the same public key.
 pub fn keygen<R: RngCore + CryptoRng>(
 	rng: &mut R,
 	params: Params,
@@ -60,21 +54,32 @@ pub fn keygen<R: RngCore + CryptoRng>(
 	let mut sigma = [0u8; SecretKey::BYTES];
 	rng.fill_bytes(&mut sigma);
 
-	let c = derive_c(&sigma, params);
-	let root = commit_c_root(&c, params);
+	let m = derive_commit_vector(&sigma, params);
+	let root = commit_root(&m, params);
 
 	let pk = PublicKey {
 		root,
 		n_star: params.n_star,
 	};
 	let sk = SecretKey::from_bytes(sigma);
-	let cache = SignerCache { c };
+	let cache = SignerCache { m };
 	(pk, sk, cache)
 }
 
-/// Derive the coefficient vector `c = (c_0, …, c_{M-1})` from `σ`.
-pub(crate) fn derive_c(sigma: &[u8; SecretKey::BYTES], params: Params) -> Vec<Goldilocks4> {
-	derive_field_elements(sigma, JV_SEED, params.m())
+/// Derive the ZK-encoded commitment vector `m = (c, r_zk)` of length `N`
+/// from a 32-byte seed. The first `M` entries are `f`'s coefficients
+/// (`JV-SEED` stream); the next `N − M` are Prop. 3.19 encoding randomness
+/// (`JV-RZK` stream).
+pub(crate) fn derive_commit_vector(
+	sigma: &[u8; SecretKey::BYTES],
+	params: Params,
+) -> Vec<Goldilocks4> {
+	let m = params.m();
+	let n = params.n();
+	let mut out = Vec::with_capacity(n);
+	out.extend(derive_field_elements(sigma, JV_SEED, m));
+	out.extend(derive_field_elements(sigma, JV_RZK, n - m));
+	out
 }
 
 /// Pull `count` uniform `Goldilocks4` elements from the `SHAKE256(tag ‖ σ)`
@@ -113,18 +118,18 @@ fn derive_field_elements(
 	}
 }
 
-/// Run WHIR's commit-only path on `c` and return just the 32-byte root.
-pub(crate) fn commit_c_root(c: &[Goldilocks4], params: Params) -> [u8; 32] {
-	let m = params.m();
-	assert_eq!(c.len(), m);
+/// Run WHIR's commit-only path on `m` and return the 32-byte root.
+pub(crate) fn commit_root(m: &[Goldilocks4], params: Params) -> [u8; 32] {
+	let n = params.n();
+	assert_eq!(m.len(), n);
 	const INTERLEAVING: usize = 4;
 	const RATE_INV: usize = 4;
-	let inner_msg_len = m / INTERLEAVING;
+	let inner_msg_len = n / INTERLEAVING;
 	let inner = ReedSolomon::<Goldilocks4>::new(inner_msg_len);
 	let code = Arc::new(InterleavedCode::new(inner, INTERLEAVING));
 	let vc = Arc::new(MerkleVc::new(inner_msg_len * RATE_INV));
 	let cc = CodeCommitment::new(code, vc);
-	let (root, _state) = cc.commit_only(c.to_vec());
+	let (root, _state) = cc.commit_only(m.to_vec());
 	root
 }
 
@@ -135,13 +140,22 @@ mod tests {
 	use rand_chacha::ChaCha20Rng;
 
 	#[test]
-	fn derive_c_is_deterministic() {
+	fn derive_commit_vector_is_deterministic() {
 		let params = Params::new(1);
 		let sigma = [42u8; 32];
-		let a = derive_c(&sigma, params);
-		let b = derive_c(&sigma, params);
+		let a = derive_commit_vector(&sigma, params);
+		let b = derive_commit_vector(&sigma, params);
 		assert_eq!(a, b);
-		assert_eq!(a.len(), params.m());
+		assert_eq!(a.len(), params.n());
+	}
+
+	#[test]
+	fn commit_vector_seed_and_rzk_streams_differ() {
+		let params = Params::new(3);
+		let sigma = [99u8; 32];
+		let m = derive_commit_vector(&sigma, params);
+		let split = params.m();
+		assert_ne!(&m[..1], &m[split..split + 1]);
 	}
 
 	#[test]
@@ -161,7 +175,7 @@ mod tests {
 		let mut rng = ChaCha20Rng::seed_from_u64(1);
 		let (pk, sk, cache) = keygen(&mut rng, params);
 		let cache2 = SignerCache::from_secret(&sk, params);
-		assert_eq!(cache.c, cache2.c);
-		assert_eq!(pk.root, commit_c_root(&cache2.c, params));
+		assert_eq!(cache.m, cache2.m);
+		assert_eq!(pk.root, commit_root(&cache2.m, params));
 	}
 }

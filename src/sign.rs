@@ -70,7 +70,7 @@ impl Signature {
 /// the API to mirror standard signature interfaces and to make it explicit
 /// that a `SecretKey` is required to call this function.
 pub fn sign(
-	_sk: &SecretKey,
+	sk: &SecretKey,
 	pk: &PublicKey,
 	cache: &SignerCache,
 	params: Params,
@@ -78,24 +78,29 @@ pub fn sign(
 ) -> Signature {
 	let k = Params::K as usize;
 	let nu = params.nu();
+	let nu_prime = params.nu_prime();
 	let t = params.t();
 	let m = params.m();
+	let n = params.n();
 
 	// 1. Positions and their ψ-images.
 	let positions = derive_positions(&pk.root, msg, k, t);
 	let xs: Vec<Goldilocks4> = positions.iter().map(|&i| psi(i as u64, t as u64)).collect();
 
-	// 2. y_t = f(x_t) via Horner over the coefficient vector.
-	let ys: Vec<Goldilocks4> = xs.iter().map(|&x| horner(&cache.c, x)).collect();
+	// 2. y_t = f(x_t) via Horner over the M honest coefficients (the trailing
+	//    ZK-randomness entries of `m` are multiplied by zero in u(x); see
+	//    lift.rs).
+	let coeffs = &cache.m[..m];
+	let ys: Vec<Goldilocks4> = xs.iter().map(|&x| horner(coeffs, x)).collect();
 
 	// 3. β challenges (verifier re-derives the same vector from
 	//    `(root, msg, ys)`).
 	let betas = derive_betas(&pk.root, msg, &ys);
 
-	// 4. Materialise α = Σ_t β_t · u(x_t) as a length-M vector for the prover.
-	let mut alpha = vec![Goldilocks4::ZERO; m];
+	// 4. Materialise α = Σ_t β_t · u(x_t) as a length-N vector for the prover.
+	let mut alpha = vec![Goldilocks4::ZERO; n];
 	for (&x, &beta) in xs.iter().zip(betas.iter()) {
-		let u = MonomialLift::new(x, nu).materialize();
+		let u = MonomialLift::new(x, nu, nu_prime).materialize();
 		for (a, &uk) in alpha.iter_mut().zip(u.iter()) {
 			*a += beta * uk;
 		}
@@ -110,13 +115,38 @@ pub fn sign(
 		.instance(&prefix);
 	let mut transcript = domain.std_prover();
 
-	let whir = ConcreteWhirProtocol::build(m, 32, 64);
-	whir.prove_to_transcript(&mut transcript, cache.c.clone(), LinearForm::new(alpha));
+	// Derive per-signature mask seed for the HVZK base case from
+	// (sk_seed, root, msg, ys). Deterministic, but unique per signature.
+	let mask_seed = derive_mask_seed(sk, &pk.root, msg, &ys);
+
+	let whir = ConcreteWhirProtocol::build(n, 32, 64);
+	whir.prove_to_transcript(
+		&mut transcript,
+		cache.m.clone(),
+		LinearForm::new(alpha),
+		&mask_seed,
+	);
 
 	Signature {
 		y_values: ys,
 		whir_proof: transcript.narg_string().to_vec(),
 	}
+}
+
+/// Derive the per-signature HVZK mask seed from
+/// `(sk_seed, root, msg, ys)`. Deterministic — the same `(sk, msg)` produces
+/// the same mask seed — but unique across messages, which is what HVZK
+/// requires per signature.
+fn derive_mask_seed(sk: &SecretKey, root: &[u8; 32], msg: &[u8], ys: &[Goldilocks4]) -> [u8; 32] {
+	use crate::hash::{Family, JV_RZK, hash};
+	let mut ys_bytes = Vec::with_capacity(ys.len() * 32);
+	for y in ys {
+		ys_bytes.extend_from_slice(&y.to_bytes());
+	}
+	let h = hash(Family::Xof, JV_RZK, &[sk.seed(), root, msg, &ys_bytes], 32);
+	let mut out = [0u8; 32];
+	out.copy_from_slice(&h);
+	out
 }
 
 /// Horner evaluation of `Σ_k coeffs[k] · x^k`.

@@ -24,7 +24,7 @@
 
 use std::sync::Arc;
 
-use spongefish::{ProverState, VerificationError, VerificationResult, VerifierState};
+use spongefish::{ProverState, VerificationResult, VerifierState};
 
 use super::code::{InterleavedCode, ReedSolomon};
 use super::codeswitch::CodeswitchHandle;
@@ -39,7 +39,7 @@ use super::sumcheck::{prove_sumcheck, verify_sumcheck};
 use super::transcript_io::{
 	read_opening, sample_positions_prover, sample_positions_verifier, write_opening,
 };
-use super::trivial::Trivial;
+use super::trivial::{TrivialZk, verify_trivial_zk};
 use super::vc::MerkleVc;
 use super::zero_evader::{ETA, OodEvader, OodEvaderHandle};
 use crate::field::Goldilocks4;
@@ -85,6 +85,7 @@ impl ProverCodeswitch {
 		transcript: &mut ProverState,
 		input: ProverFolded,
 		mut constraint: LinearForm<Goldilocks4>,
+		sumcheck_masks: &[Goldilocks4],
 	) -> (LinearForm<Goldilocks4>, ProverFolded) {
 		let output = self
 			.output_commitment
@@ -127,7 +128,8 @@ impl ProverCodeswitch {
 		}
 		constraint += LinearForm::new(input.code().apply_transpose(&selector));
 
-		let (folded_state, folded_constraint) = prove_sumcheck(transcript, output, constraint);
+		let (folded_state, folded_constraint) =
+			prove_sumcheck(transcript, output, constraint, sumcheck_masks);
 		(folded_constraint, folded_state)
 	}
 }
@@ -137,7 +139,7 @@ impl ProverCodeswitch {
 pub(crate) struct ConcreteWhirProtocol {
 	initial_commitment: ProverCommit,
 	rounds: Vec<ProverCodeswitch>,
-	final_trivial: Trivial,
+	final_trivial: TrivialZk,
 }
 
 impl ConcreteWhirProtocol {
@@ -165,29 +167,90 @@ impl ConcreteWhirProtocol {
 		Self {
 			initial_commitment,
 			rounds,
-			final_trivial: Trivial { queries },
+			final_trivial: TrivialZk { queries },
 		}
 	}
 
 	/// Prove `⟨msg, α⟩ = v` against the Fiat–Shamir prover transcript.
+	///
+	/// `mask_seed` is fresh per-signature randomness used to derive the
+	/// HVZK masking polynomials (Constructions 6.3 and 7.2 of
+	/// eprint 2026/391). Must be unique per signature for HVZK.
 	pub(crate) fn prove_to_transcript(
 		&self,
 		transcript: &mut ProverState,
 		msg: Vec<Goldilocks4>,
 		initial_constraint: LinearForm<Goldilocks4>,
+		mask_seed: &[u8; 32],
 	) {
+		// TODO: HVZK sumcheck (Construction 6.3) is wired through but
+		// currently passes empty masks for both initial and per-codeswitch
+		// sumcheck calls — the masked round-polynomial construction has a
+		// math bug that needs debugging. Leaving the parameter threaded so
+		// the wire is in place; the non-HVZK sumcheck path is byte-identical
+		// to the pre-HVZK behavior.
+		let no_masks: &[Goldilocks4] = &[];
+
 		let initial_state = self.initial_commitment.commit(transcript, msg);
 		let (mut folded_state, mut constraint) =
-			prove_sumcheck(transcript, initial_state, initial_constraint);
+			prove_sumcheck(transcript, initial_state, initial_constraint, no_masks);
 
 		for round in &self.rounds {
-			let (next_constraint, next_folded) = round.prove(transcript, folded_state, constraint);
+			let (next_constraint, next_folded) =
+				round.prove(transcript, folded_state, constraint, no_masks);
 			folded_state = next_folded;
 			constraint = next_constraint;
 		}
 
-		let final_opening = self.final_trivial.prove(transcript, folded_state);
-		write_opening(transcript, &final_opening);
+		// HVZK base case (Construction 7.2): commit mask, send mask_sum,
+		// receive γ, send f* = g + γ·f, open both codewords at random
+		// positions.
+		let coefficients: Vec<Goldilocks4> = constraint.coefficients().to_vec();
+		let mask_state = self.final_trivial.commit_mask(
+			transcript,
+			folded_state.msg().len(),
+			&coefficients,
+			mask_seed,
+		);
+		self.final_trivial
+			.finish(transcript, folded_state, mask_state);
+	}
+}
+
+/// Derive `count` HVZK sumcheck mask field elements deterministically from
+/// the per-signature `mask_seed` via the `JV-RZK` SHAKE256 stream, with a
+/// distinct sub-domain tag so this stream is independent of the base case's
+/// `g_msg` stream.
+fn derive_sumcheck_masks(mask_seed: &[u8; 32], count: usize) -> Vec<Goldilocks4> {
+	use crate::hash::{Family, JV_RZK, hash};
+	let mut buffer_size = count * 32 * 2 + 32;
+	let mut refill = 0u64;
+	loop {
+		let extra = refill.to_le_bytes();
+		let stream = if refill == 0 {
+			hash(Family::Xof, JV_RZK, &[mask_seed, b"sumcheck"], buffer_size)
+		} else {
+			hash(
+				Family::Xof,
+				JV_RZK,
+				&[mask_seed, b"sumcheck", &extra],
+				buffer_size,
+			)
+		};
+		let mut out = Vec::with_capacity(count);
+		let mut cursor = 0usize;
+		while out.len() < count && cursor + 32 <= stream.len() {
+			let chunk = &stream[cursor..cursor + 32];
+			cursor += 32;
+			if let Some(g) = Goldilocks4::from_bytes(chunk) {
+				out.push(g);
+			}
+		}
+		if out.len() == count {
+			return out;
+		}
+		buffer_size *= 2;
+		refill += 1;
 	}
 }
 
@@ -270,7 +333,7 @@ impl VerifierCodeswitch {
 		};
 
 		let (folded_output, folded_constraint) =
-			verify_sumcheck(transcript, output, batched_constraint)?;
+			verify_sumcheck(transcript, output, batched_constraint, false)?;
 		Ok((folded_constraint, folded_output))
 	}
 }
@@ -280,7 +343,7 @@ impl VerifierCodeswitch {
 pub(crate) struct ConcreteWhirVerifier {
 	initial_commitment: VerifierExplicit,
 	rounds: Vec<VerifierCodeswitch>,
-	final_trivial: Trivial,
+	final_trivial: TrivialZk,
 }
 
 impl ConcreteWhirVerifier {
@@ -305,7 +368,7 @@ impl ConcreteWhirVerifier {
 		Self {
 			initial_commitment,
 			rounds,
-			final_trivial: Trivial { queries },
+			final_trivial: TrivialZk { queries },
 		}
 	}
 
@@ -325,7 +388,7 @@ impl ConcreteWhirVerifier {
 		};
 
 		let (mut folded_commitment, mut constraint) =
-			verify_sumcheck(transcript, initial_commitment, initial_constraint)?;
+			verify_sumcheck(transcript, initial_commitment, initial_constraint, false)?;
 
 		for round in &self.rounds {
 			let (next_constraint, next_folded) =
@@ -334,44 +397,13 @@ impl ConcreteWhirVerifier {
 			folded_commitment = next_folded;
 		}
 
-		// Final trivial step (inlined so the opening lands at the correct
-		// transcript offset).
-		let msg = transcript.prover_messages_vec::<Goldilocks4>(folded_commitment.msg_len())?;
-		let encoded = folded_commitment.encode(&msg);
-		let positions = sample_positions_verifier(
+		// HVZK base case verifier (Construction 7.2 of eprint 2026/391).
+		verify_trivial_zk(
 			transcript,
 			self.final_trivial.queries,
-			folded_commitment.codeword_len(),
-		);
-
-		let final_path_len_per_opening = folded_commitment
-			.codeword_len()
-			.next_power_of_two()
-			.trailing_zeros() as usize;
-		let final_openings = read_opening(
-			transcript,
-			self.final_trivial.queries,
-			INTERLEAVING,
-			self.final_trivial.queries * final_path_len_per_opening,
-		)?;
-		let opened = folded_commitment.verify_openings(&positions, &final_openings)?;
-
-		for (&pos, opening) in positions.iter().zip(&opened) {
-			if encoded.get(pos) != Some(opening) {
-				return Err(VerificationError);
-			}
-		}
-
-		let coefficients = constraint.linear_form_handle.folded_form(&[]);
-		if coefficients.len() != msg.len() {
-			return Err(VerificationError);
-		}
-		let dot_product: Goldilocks4 = coefficients.into_iter().zip(msg).map(|(a, b)| a * b).sum();
-		if dot_product == constraint.value {
-			Ok(())
-		} else {
-			Err(VerificationError)
-		}
+			folded_commitment,
+			constraint,
+		)
 	}
 }
 

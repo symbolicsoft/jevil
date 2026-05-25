@@ -29,6 +29,92 @@ use crate::field::Goldilocks4;
 pub(crate) const ETA: usize = 2;
 
 // ---------------------------------------------------------------------------
+// Private zero-evader (Lemma 9.3 of eprint 2026/391)
+// ---------------------------------------------------------------------------
+
+/// Private OOD zero-evader. Extends [`OodEvader`] with a freshly-sampled
+/// `ETA × r_len` random matrix `M` whose columns span `F^ETA`, per Lemma 9.3
+/// of eprint 2026/391. The OOD answer is
+///
+/// ```text
+/// y_i = ze(ρ_i) · m + M[i] · r        for i ∈ [ETA],
+/// ```
+///
+/// where `m` is the source message (length `k`) and `r` is fresh encoding
+/// randomness of length `r_len`. The verifier sees `M` in the transcript;
+/// the prover supplies `r`. With `M` chosen so its columns span `F^ETA`,
+/// the joint distribution of `(ρ, y)` is statistically independent of `m`
+/// over random `r` — that's the privacy property.
+pub(crate) struct PrivateOodEvader {
+	pub(crate) k: usize,
+	pub(crate) r_len: usize,
+}
+
+impl PrivateOodEvader {
+	pub(crate) fn new(k: usize, r_len: usize) -> Self {
+		Self { k, r_len }
+	}
+
+	/// `apply(msg, r, seeds, m_matrix)[i] = ze(seeds[i])·msg + m_matrix[i]·r`.
+	pub(crate) fn apply(
+		&self,
+		msg: &[Goldilocks4],
+		r: &[Goldilocks4],
+		seeds: &[Goldilocks4],
+		m_matrix: &[Vec<Goldilocks4>],
+	) -> Vec<Goldilocks4> {
+		assert_eq!(msg.len(), self.k);
+		assert_eq!(r.len(), self.r_len);
+		assert_eq!(seeds.len(), m_matrix.len());
+
+		seeds
+			.iter()
+			.zip(m_matrix.iter())
+			.map(|(seed, m_row)| {
+				assert_eq!(m_row.len(), self.r_len);
+				// ze(seed)·msg by Horner.
+				let mut acc = Goldilocks4::ZERO;
+				for c in msg.iter().rev() {
+					acc = acc * *seed + *c;
+				}
+				// + M[i]·r.
+				for (m, ri) in m_row.iter().zip(r.iter()) {
+					acc += *m * *ri;
+				}
+				acc
+			})
+			.collect()
+	}
+
+	/// Per-output linear-form row: `[1, seed, seed², …, seed^{k-1}, M[i,0],
+	/// M[i,1], …, M[i, r_len-1]]` — length `k + r_len`. Applied to `(msg, r)`
+	/// of length `k + r_len`, returns the OOD answer.
+	pub(crate) fn expanded_constraint(
+		&self,
+		seeds: &[Goldilocks4],
+		m_matrix: &[Vec<Goldilocks4>],
+	) -> Vec<Vec<Goldilocks4>> {
+		assert_eq!(seeds.len(), m_matrix.len());
+
+		seeds
+			.iter()
+			.zip(m_matrix.iter())
+			.map(|(seed, m_row)| {
+				assert_eq!(m_row.len(), self.r_len);
+				let mut row = Vec::with_capacity(self.k + self.r_len);
+				let mut p = Goldilocks4::ONE;
+				for _ in 0..self.k {
+					row.push(p);
+					p *= *seed;
+				}
+				row.extend_from_slice(m_row);
+				row
+			})
+			.collect()
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Prover-side: OodEvader
 // ---------------------------------------------------------------------------
 

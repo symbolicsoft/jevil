@@ -120,6 +120,57 @@ impl Params {
 	pub(crate) fn canonical_bytes(&self) -> [u8; 4] {
 		self.n_star.to_le_bytes()
 	}
+
+	/// Worst-case F-linear functionals on the WHIR commit vector `m` that
+	/// one signature transcript exposes — i.e. queries + OOD samples +
+	/// sumcheck round polynomials summed across all codeswitch rounds and
+	/// the final trivial step. The per-round contribution is `32 + η + 4
+	/// = 38` functionals (32 in-domain queries + `η = 2` OOD samples + 4
+	/// sumcheck-poly elements per round), and the codeswitch round count
+	/// is bounded by `R ≤ 9` for any deployable `n_star`. With the
+	/// initial sumcheck (4 functionals) and the final trivial step (~32
+	/// functionals at the leaf), the bound `38 · R + 36 ≤ 400` covers any
+	/// deployable `n_star`.
+	///
+	/// We use `512` (next-power-of-two slack above `400`) so multi-signature
+	/// Prop.\ 3.19 hiding holds across `n_star · Q_MAX` cumulative WHIR
+	/// queries to the public-key codeword.
+	pub const Q_MAX: u64 = 512;
+
+	/// `N = 2^ν'` — the committed length, including ZK encoding randomness
+	/// per Prop. 3.19 of eprint 2026/391. The public key commits to
+	/// `Enc_C(c, r_zk)` with `|c| = M` and `|r_zk| = N − M`. We size
+	/// `|r_zk| ≥ n* · Q_MAX` so that the cumulative F-linear functionals
+	/// across all `n*` signatures are absorbed by the encoding randomness
+	/// — i.e. perfect honest-verifier ZK across the full signing budget.
+	pub fn nu_prime(&self) -> u32 {
+		let total = self.m() as u64 + (self.n_star as u64).saturating_mul(Self::Q_MAX);
+		// At least `M + Q_MAX` so a single-signature deployment still has
+		// nontrivial encoding randomness.
+		let total = total.max(self.m() as u64 + Self::Q_MAX);
+		ceil_log2_u64(total)
+	}
+
+	/// `N = 2^ν'`. Length of the ZK-encoded coefficient vector that gets
+	/// WHIR-committed.
+	pub fn n(&self) -> usize {
+		1usize << self.nu_prime()
+	}
+
+	/// Message length of the small ZK code `C_zk` used for sumcheck masks
+	/// and codeswitch mask oracles (paper §2.7 footnote: message length
+	/// `O(λ / log log λ)`, rate `1 / log λ`). Fixed at `m_zk = 64` with
+	/// rate `1/4` to match the main code's NTT-friendly geometry.
+	pub const M_ZK: usize = 64;
+
+	/// ZK query budget for `C_zk` itself (Prop. 3.19 with `t_zk = 32`).
+	pub const T_ZK: usize = 32;
+
+	/// Degree-bound for sumcheck mask polynomials: `ℓ_zk` per Construction
+	/// 6.3. Picked at `3` (degree-2 univariate, three coefficients) so the
+	/// round polynomial degree stays `max(2, ℓ_zk − 1) = 2` — same wire
+	/// format as the non-ZK sumcheck.
+	pub const L_ZK: usize = 3;
 }
 
 /// `⌈log₂(x)⌉` for positive `x`.
@@ -148,6 +199,18 @@ mod tests {
 		assert_eq!(p.m(), 1 << 14);
 		assert_eq!(p.d(), (1 << 14) - 1);
 		assert_eq!(p.n_cliff(), 1024);
+		// |r_zk| ≥ 1023 · 512 ≈ 524K ⇒ N ≥ 16K + 524K ≈ 2^20.
+		assert_eq!(p.nu_prime(), 20);
+		assert_eq!(p.n(), 1 << 20);
+	}
+
+	#[test]
+	fn nu_prime_strictly_greater_than_nu() {
+		for n_star in [1u32, 3, 7, 15, 31, 63, 127, 255, 511, 1023] {
+			let p = Params::new(n_star);
+			assert!(p.nu_prime() > p.nu(), "n_star={n_star}");
+			assert!((p.n() - p.m()) as u64 >= 300, "n_star={n_star}");
+		}
 	}
 
 	#[test]

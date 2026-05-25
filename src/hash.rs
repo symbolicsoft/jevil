@@ -38,6 +38,11 @@ use shake::{ExtendableOutput, Shake256, Update, XofReader};
 
 /// Domain tag for the seed-derived polynomial coefficients (XOF).
 pub(crate) const JV_SEED: [u8; 8] = *b"JV-SEED\0";
+/// Domain tag for the seed-derived ZK encoding randomness (Prop. 3.19 of
+/// eprint 2026/391). Used to extend the committed message from `M` to `N`
+/// before NTT encoding so that any subset of ≤ `N − M` codeword positions
+/// reveals nothing about the honest coefficients.
+pub(crate) const JV_RZK: [u8; 8] = *b"JV-RZK_\0";
 /// Domain tag for per-message position derivation (XOF).
 pub(crate) const JV_POSN: [u8; 8] = *b"JV-POSN\0";
 /// Domain tag for the Fiat–Shamir batching challenges (XOF).
@@ -216,6 +221,7 @@ mod tests {
 	#[test]
 	fn spec_tags_are_present() {
 		assert_eq!(&JV_SEED, b"JV-SEED\0");
+		assert_eq!(&JV_RZK, b"JV-RZK_\0");
 		assert_eq!(&JV_POSN, b"JV-POSN\0");
 		assert_eq!(&JV_FSCH, b"JV-FSCH\0");
 		assert_eq!(&JV_WHIR, b"JV-WHIR\0");

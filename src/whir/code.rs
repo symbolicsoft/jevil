@@ -66,32 +66,48 @@ pub(crate) trait LinearCode:
 // ReedSolomon
 // ---------------------------------------------------------------------------
 
-/// Reed–Solomon code over `F`, rate `1/4` (codeword length `= 4 · msg_len`).
+/// Reed–Solomon code over `F`, rate `1/4` (codeword length `= 4 · msg_len`),
+/// with an optional `t`-query zero-knowledge encoding per Prop. 3.19 of
+/// eprint 2026/391.
 ///
-/// Messages are interpreted as polynomial coefficient vectors of length `k`;
-/// encoding evaluates at the `4k`-th roots of unity via a radix-2 NTT. The
-/// generic `F` is present for forward compatibility; the [`AdditiveCode`] and
-/// [`LinearCode`] impls are specialised to [`Goldilocks4`].
+/// In the ZK variant the prover commits to `Enc(f, r) := NTT(f ‖ r)` where
+/// `f` is the length-`msg_len` honest message and `r` is a length-`t` block
+/// of fresh randomness. Any subset of at most `t` codeword positions is then
+/// statistically independent of `f` with error 0 (RS gives perfect ZK).
+///
+/// When `t = 0` the encoding reduces to plain RS, bit-for-bit identical to
+/// the non-ZK path.
 pub(crate) struct ReedSolomon<F> {
-	/// Length of the message (polynomial degree + 1).
+	/// Length of the honest message (polynomial degree + 1).
 	pub(crate) msg_len: usize,
-	/// Length of the codeword (always `4 · msg_len`).
+	/// Length of the ZK randomness appended before NTT.
+	pub(crate) zk_pad: usize,
+	/// Length of the codeword (`4 · (msg_len + zk_pad)`).
 	pub(crate) codeword_len: usize,
 	_f: PhantomData<F>,
 }
 
 impl<F> ReedSolomon<F> {
-	/// Construct a rate-1/4 Reed–Solomon code with the given message length.
-	///
-	/// Panics if `msg_len` is not a power of two — required by the NTT.
+	/// Plain (non-ZK) rate-1/4 Reed–Solomon code with the given message length.
 	pub(crate) fn new(msg_len: usize) -> Self {
+		Self::new_zk(msg_len, 0)
+	}
+
+	/// Rate-1/4 Reed–Solomon code with a `t`-query ZK encoding (Prop. 3.19).
+	///
+	/// The committed vector has length `msg_len + zk_pad`; this combined
+	/// length must be a power of two (required by the NTT). For `zk_pad = 0`
+	/// the encoding is plain RS.
+	pub(crate) fn new_zk(msg_len: usize, zk_pad: usize) -> Self {
+		let total = msg_len + zk_pad;
 		assert!(
-			msg_len.is_power_of_two(),
-			"ReedSolomon::new: msg_len must be a power of 2, got {msg_len}"
+			total.is_power_of_two(),
+			"ReedSolomon::new_zk: msg_len + zk_pad must be a power of 2, got {total}"
 		);
 		Self {
 			msg_len,
-			codeword_len: msg_len * 4,
+			zk_pad,
+			codeword_len: total * 4,
 			_f: PhantomData,
 		}
 	}
@@ -101,8 +117,11 @@ impl AdditiveCode for ReedSolomon<Goldilocks4> {
 	type InputAlphabet = Goldilocks4;
 	type OutputAlphabet = Goldilocks4;
 
+	/// The "input" length seen by callers is `msg_len + zk_pad` — i.e. the
+	/// committed object includes the encoding randomness. The lift addresses
+	/// only the first `msg_len` entries.
 	fn msg_len(&self) -> usize {
-		self.msg_len
+		self.msg_len + self.zk_pad
 	}
 
 	fn codeword_len(&self) -> usize {
@@ -112,7 +131,7 @@ impl AdditiveCode for ReedSolomon<Goldilocks4> {
 	fn encode(&self, input: &[Self::InputAlphabet]) -> Vec<Self::OutputAlphabet> {
 		assert_eq!(
 			input.len(),
-			self.msg_len,
+			self.msg_len + self.zk_pad,
 			"ReedSolomon::encode: input length mismatch"
 		);
 		let mut padded = input.to_vec();

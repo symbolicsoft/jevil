@@ -61,12 +61,12 @@ pub fn verify(pk: &PublicKey, params: Params, msg: &[u8], sig: &Signature) -> Re
 		.instance(&prefix);
 	let mut transcript = domain.std_verifier(&sig.whir_proof);
 
-	// 3. Build the symbolic α handle (O(K · ν) verifier — no length-M alloc).
-	let alpha = BatchedAlpha::new(&xs, betas, params.nu());
+	// 3. Build the symbolic α handle (O(K · ν') verifier — no length-N alloc).
+	let alpha = BatchedAlpha::new(&xs, betas, params.nu(), params.nu_prime());
 	let constraint = LinearConstraint::new(alpha, v);
 
 	// 4. Run WHIR's verifier on top.
-	let whir = ConcreteWhirVerifier::build(params.m(), 32, 64);
+	let whir = ConcreteWhirVerifier::build(params.n(), 32, 64);
 	whir.verify_from_transcript(&mut transcript, constraint)
 		.map_err(|_| Error::VerificationFailed)?;
 	transcript
