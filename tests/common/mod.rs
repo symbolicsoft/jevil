@@ -1,8 +1,8 @@
 //! Spec-side reference implementations of the procedures Jevil's integration
 //! tests need to drive end-to-end. These re-implement the paper §4.4 / §4.1
 //! procedures from scratch using only `shake` and the public `Goldilocks4`
-//! type, so a bug in `jevil`'s private hash/positions/keygen code cannot mask
-//! itself by silently matching the test's expectations.
+//! type, so a bug in `jevil`'s private hash/positions/keygen code cannot
+//! hide itself by silently matching the test's expectations.
 
 #![allow(dead_code)]
 
@@ -82,9 +82,9 @@ pub fn derive_positions(root: &[u8; 32], msg: &[u8], k: usize, t: usize) -> Vec<
 	indices
 }
 
-/// Spec-side re-derivation of the `M` honest coefficients `(c_0, …, c_{M−1})`
-/// from a 32-byte seed. Same chunk-and-reject parser as `derive_positions`.
-pub fn derive_seed_coeffs(sigma: &[u8; 32], m: usize) -> Vec<Goldilocks4> {
+/// Spec-side re-derivation of the `M` coefficients `(c_0, …, c_{M−1})` from
+/// a 32-byte seed. Same chunk-and-reject parser as `derive_positions`.
+pub fn derive_coeffs(sigma: &[u8; 32], m: usize) -> Vec<Goldilocks4> {
 	let mut buffer_size = m * 32 * 2 + 32;
 	loop {
 		let stream = shake256_tagged(JV_SEED, &[sigma], buffer_size);

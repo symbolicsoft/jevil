@@ -4,8 +4,8 @@
 //! This module is **crate-private**: external callers should never depend on
 //! its types. The only Jevil-relevant operations on WHIR are
 //!
-//! 1. *commit* to a length-`N` coefficient vector (run during [`crate::keygen`]),
-//! 2. *open* a linear-form claim `⟨c^pad, α⟩ = v` (run during [`crate::sign`]),
+//! 1. *commit* to a length-`M` coefficient vector (run during [`crate::keygen`]),
+//! 2. *open* a linear-form claim `⟨c, α⟩ = v` (run during [`crate::sign`]),
 //! 3. *verify* that opening against a public commitment root (run during
 //!    [`crate::verify`]).
 //!

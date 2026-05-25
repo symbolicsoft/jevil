@@ -78,28 +78,24 @@ pub fn sign(
 ) -> Signature {
 	let k = Params::K as usize;
 	let nu = params.nu();
-	let nu_prime = params.nu_prime();
 	let t = params.t();
 	let m = params.m();
-	let n = params.n();
 
 	// 1. Positions and their ψ-images.
 	let positions = derive_positions(&pk.root, msg, k, t);
 	let xs: Vec<Goldilocks4> = positions.iter().map(|&i| psi(i as u64, t as u64)).collect();
 
-	// 2. y_t = f(x_t) via Horner over the M honest coefficients only (the
-	//    masks live at positions ≥ M and contribute nothing — see lift.rs).
-	let coeffs = &cache.c_pad[..m];
-	let ys: Vec<Goldilocks4> = xs.iter().map(|&x| horner(coeffs, x)).collect();
+	// 2. y_t = f(x_t) via Horner over the coefficient vector.
+	let ys: Vec<Goldilocks4> = xs.iter().map(|&x| horner(&cache.c, x)).collect();
 
 	// 3. β challenges (verifier re-derives the same vector from
 	//    `(root, msg, ys)`).
 	let betas = derive_betas(&pk.root, msg, &ys);
 
-	// 4. Materialise α = Σ_t β_t · u(x_t) as a length-N vector for the prover.
-	let mut alpha = vec![Goldilocks4::ZERO; n];
+	// 4. Materialise α = Σ_t β_t · u(x_t) as a length-M vector for the prover.
+	let mut alpha = vec![Goldilocks4::ZERO; m];
 	for (&x, &beta) in xs.iter().zip(betas.iter()) {
-		let u = MonomialLift::new(x, nu, nu_prime).materialize();
+		let u = MonomialLift::new(x, nu).materialize();
 		for (a, &uk) in alpha.iter_mut().zip(u.iter()) {
 			*a += beta * uk;
 		}
@@ -114,8 +110,8 @@ pub fn sign(
 		.instance(&prefix);
 	let mut transcript = domain.std_prover();
 
-	let whir = ConcreteWhirProtocol::build(n, 32, 64);
-	whir.prove_to_transcript(&mut transcript, cache.c_pad.clone(), LinearForm::new(alpha));
+	let whir = ConcreteWhirProtocol::build(m, 32, 64);
+	whir.prove_to_transcript(&mut transcript, cache.c.clone(), LinearForm::new(alpha));
 
 	Signature {
 		y_values: ys,

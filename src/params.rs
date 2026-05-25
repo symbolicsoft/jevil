@@ -9,17 +9,18 @@
 /// Configuration for a Jevil signer/verifier.
 ///
 /// The only field is the signing budget [`Params::n_star`]. All derived
-/// quantities (`M`, `N`, `T`, `ν`, `ν'`, `n_cliff`) are computed on demand by
-/// methods on `Params` from `n_star` and the global constant `K`.
+/// quantities (`M`, `T`, `ν`, `n_cliff`) are computed on demand by methods on
+/// `Params` from `n_star` and the global constant `K`.
 ///
-/// **`n_star + 1` must be a power of two** — that is, `n_star ∈ {1, 3, 7, 15,
-/// 31, 63, 127, 255, 511, 1023, …}`. This is the recommended regime of the
-/// paper, where `(n_star + 1) · K` is itself a power of two, `M = (n_star +
+/// **`n_star + 1` must be a power of two** — i.e. `n_star` must lie in the
+/// recommended set `{1, 3, 7, 15, 31, 63, 127, 255, 511, 1023, …}`. Within
+/// this regime `(n_star + 1) · K` is itself a power of two, `M = (n_star +
 /// 1) · K` exactly, and the cliff fires at signature `n_star + 1`. Outside
-/// this regime `M` would round up to the next power of two, leaving a gap
-/// between `n_star` and `n_cliff` that erodes the HORS coverage margin
-/// (Theorem~7, §5.3 of the paper); [`Params::new`] panics rather than letting
-///    a caller deploy into the bad regime by accident.
+/// it, `M` rounds up to the next power of two and a gap opens between
+/// `n_star` and `n_cliff` that erodes the HORS coverage margin. The
+/// constructor [`Params::new`] panics on any non-recommended `n_star` rather
+/// than letting a caller deploy into the bad regime by accident.
+#[allow(clippy::doc_lazy_continuation)]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct Params {
 	/// The signing budget: at most `n_star` honest signatures should be issued
@@ -46,11 +47,9 @@ impl Params {
 	/// Panics if `n_star == 0` or if `n_star + 1` is not a power of two. The
 	/// latter restricts callers to the recommended regime `n_star ∈ {1, 3, 7,
 	/// 15, 31, 63, 127, 255, 511, 1023, …}` so that `M = (n_star + 1) · K`
-	/// exactly and the cliff fires at signature `n_star + 1`. Outside this
-	/// regime `M` rounds up to the next power of two, leaving a gap between
-	/// `n_star` and `n_cliff` that erodes the HORS coverage margin (§5.3 of
-	/// the paper). A `const`-time assertion catches the mistake at
-	/// construction rather than producing a silently-misconfigured deployment.
+	/// exactly and the cliff fires at signature `n_star + 1`. A `const`-time
+	/// assertion catches the mistake at construction rather than producing a
+	/// silently-misconfigured deployment.
 	pub const fn new(n_star: u32) -> Self {
 		assert!(n_star >= 1, "Params::new: n_star must be ≥ 1 (per spec §3)");
 		// (n_star + 1) must be a power of two ⇔ (n_star + 1) & n_star == 0.
@@ -79,7 +78,7 @@ impl Params {
 		ceil_log2_u64(prod)
 	}
 
-	/// `M = 2^ν`. The number of honest polynomial coefficients in `c^pad`.
+	/// `M = 2^ν`. The length of the coefficient vector committed via WHIR.
 	/// The secret polynomial `f` has degree `D = M − 1`.
 	pub fn m(&self) -> usize {
 		1usize << self.nu()
@@ -88,20 +87,6 @@ impl Params {
 	/// `D = M − 1`. The degree bound on the secret polynomial `f`.
 	pub fn d(&self) -> usize {
 		self.m() - 1
-	}
-
-	/// `ν' = ⌈log₂(M + 384)⌉` — the **commit dimension** exponent.
-	///
-	/// The extra 384 entries hold uniform random masks that absorb WHIR's
-	/// codeword leakage. For `M ≥ 384` this gives `ν' = ν + 1`.
-	pub fn nu_prime(&self) -> u32 {
-		ceil_log2_u64(self.m() as u64 + 384)
-	}
-
-	/// `N = 2^ν'`. The length of the padded coefficient vector that is
-	/// committed via WHIR.
-	pub fn n(&self) -> usize {
-		1usize << self.nu_prime()
 	}
 
 	/// `T = nextpow2(n* · K · 2^((λ + λ_H)/K))` — the size of the
@@ -162,8 +147,6 @@ mod tests {
 		assert_eq!(p.nu(), 14);
 		assert_eq!(p.m(), 1 << 14);
 		assert_eq!(p.d(), (1 << 14) - 1);
-		assert_eq!(p.nu_prime(), 15);
-		assert_eq!(p.n(), 1 << 15);
 		assert_eq!(p.n_cliff(), 1024);
 	}
 
@@ -172,19 +155,6 @@ mod tests {
 		for n_star in [1u32, 3, 7, 15, 31, 63, 127, 255, 511, 1023] {
 			let p = Params::new(n_star);
 			assert_eq!(p.n_cliff(), (n_star + 1) as usize, "n_star={n_star}");
-		}
-	}
-
-	#[test]
-	fn nu_prime_satisfies_zk_invariant_above_min() {
-		for n_star in [31u32, 63, 127, 1023] {
-			let p = Params::new(n_star);
-			assert!(p.m() >= 384);
-			assert!(
-				p.n() - p.m() >= 384,
-				"n_star={n_star}: N - M = {}",
-				p.n() - p.m()
-			);
 		}
 	}
 

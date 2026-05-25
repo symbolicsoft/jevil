@@ -72,5 +72,5 @@ fn cliff_recovers_polynomial_at_n_cliff() {
 }
 
 fn derive_truth(sk: &SecretKey, m: usize) -> Vec<Goldilocks4> {
-	common::derive_seed_coeffs(&sk.to_bytes(), m)
+	common::derive_coeffs(&sk.to_bytes(), m)
 }

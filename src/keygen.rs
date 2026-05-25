@@ -5,7 +5,7 @@ use std::sync::Arc;
 use rand::{CryptoRng, RngCore};
 
 use crate::field::Goldilocks4;
-use crate::hash::{Family, JV_MASK, JV_SEED, hash};
+use crate::hash::{Family, JV_SEED, hash};
 use crate::params::Params;
 use crate::whir::code::{InterleavedCode, ReedSolomon};
 use crate::whir::commitment::CodeCommitment;
@@ -14,32 +14,32 @@ use crate::{PublicKey, SecretKey};
 
 /// Cached signer state held in memory after [`keygen`] for fast signing.
 ///
-/// The cache stores the padded coefficient vector `c^pad`. The WHIR
-/// commit-and-open path constructs its own internal state fresh on each
-/// [`crate::sign`] call from `c^pad`. A signer that has lost the cache can
-/// rebuild it from the [`SecretKey`] alone via [`SignerCache::from_secret`] —
-/// at the cost of re-running the deterministic-derivation step.
+/// The cache stores the coefficient vector `c`. The WHIR commit-and-open path
+/// constructs its own internal state fresh on each [`crate::sign`] call from
+/// `c`. A signer that has lost the cache can rebuild it from the
+/// [`SecretKey`] alone via [`SignerCache::from_secret`] — at the cost of
+/// re-running the deterministic-derivation step.
 ///
-/// `c^pad` is *secret* material (its first `M` entries are `f`'s coefficients),
-/// so on drop we zeroize the vector contents via [`zeroize::Zeroize`].
+/// `c` is *secret* material (it is `f`'s coefficient vector), so on drop we
+/// zeroize the vector contents via [`zeroize::Zeroize`].
 pub struct SignerCache {
-	pub(crate) c_pad: Vec<Goldilocks4>,
+	pub(crate) c: Vec<Goldilocks4>,
 }
 
 impl Drop for SignerCache {
 	fn drop(&mut self) {
 		use zeroize::Zeroize;
-		self.c_pad.zeroize();
+		self.c.zeroize();
 	}
 }
 
 impl SignerCache {
 	/// Rebuild the cache from the secret seed and the public-key parameters.
-	/// Produces the exact same `c^pad` (and therefore the same `PublicKey`)
-	/// as the original [`keygen`] call.
+	/// Produces the exact same `c` (and therefore the same `PublicKey`) as
+	/// the original [`keygen`] call.
 	pub fn from_secret(sk: &SecretKey, params: Params) -> Self {
 		Self {
-			c_pad: derive_c_pad(sk.seed(), params),
+			c: derive_c(sk.seed(), params),
 		}
 	}
 }
@@ -49,9 +49,9 @@ impl SignerCache {
 ///
 /// `rng` is consumed only to draw a single 32-byte uniform `σ`; all
 /// subsequent randomness is derived deterministically from `σ` via the
-/// `JV-SEED` / `JV-MASK` SHAKE256 streams. The same `(rng-state, params)`
-/// always produces the same public key — useful for testing, but consequential
-/// for production: re-seeding the RNG identically will re-derive the same
+/// `JV-SEED` SHAKE256 stream. The same `(rng-state, params)` always produces
+/// the same public key — useful for testing, but consequential for
+/// production: re-seeding the RNG identically will re-derive the same
 /// signing key.
 pub fn keygen<R: RngCore + CryptoRng>(
 	rng: &mut R,
@@ -60,27 +60,21 @@ pub fn keygen<R: RngCore + CryptoRng>(
 	let mut sigma = [0u8; SecretKey::BYTES];
 	rng.fill_bytes(&mut sigma);
 
-	let c_pad = derive_c_pad(&sigma, params);
-	let root = commit_c_pad_root(&c_pad, params);
+	let c = derive_c(&sigma, params);
+	let root = commit_c_root(&c, params);
 
 	let pk = PublicKey {
 		root,
 		n_star: params.n_star,
 	};
 	let sk = SecretKey::from_bytes(sigma);
-	let cache = SignerCache { c_pad };
+	let cache = SignerCache { c };
 	(pk, sk, cache)
 }
 
-/// Compose the padded coefficient vector
-/// `c^pad = (c_0, …, c_{M-1}, r_1, …, r_{N-M})` from `σ`.
-pub(crate) fn derive_c_pad(sigma: &[u8; SecretKey::BYTES], params: Params) -> Vec<Goldilocks4> {
-	let m = params.m();
-	let n = params.n();
-	let mut c_pad = Vec::with_capacity(n);
-	c_pad.extend(derive_field_elements(sigma, JV_SEED, m));
-	c_pad.extend(derive_field_elements(sigma, JV_MASK, n - m));
-	c_pad
+/// Derive the coefficient vector `c = (c_0, …, c_{M-1})` from `σ`.
+pub(crate) fn derive_c(sigma: &[u8; SecretKey::BYTES], params: Params) -> Vec<Goldilocks4> {
+	derive_field_elements(sigma, JV_SEED, params.m())
 }
 
 /// Pull `count` uniform `Goldilocks4` elements from the `SHAKE256(tag ‖ σ)`
@@ -114,23 +108,23 @@ fn derive_field_elements(
 		if out.len() == count {
 			return out;
 		}
-		buffer_size = (buffer_size * 2).max(64);
+		buffer_size *= 2;
 		refill_tag += 1;
 	}
 }
 
-/// Run WHIR's commit-only path on `c^pad` and return just the 32-byte root.
-pub(crate) fn commit_c_pad_root(c_pad: &[Goldilocks4], params: Params) -> [u8; 32] {
-	let n = params.n();
-	assert_eq!(c_pad.len(), n);
+/// Run WHIR's commit-only path on `c` and return just the 32-byte root.
+pub(crate) fn commit_c_root(c: &[Goldilocks4], params: Params) -> [u8; 32] {
+	let m = params.m();
+	assert_eq!(c.len(), m);
 	const INTERLEAVING: usize = 4;
 	const RATE_INV: usize = 4;
-	let inner_msg_len = n / INTERLEAVING;
+	let inner_msg_len = m / INTERLEAVING;
 	let inner = ReedSolomon::<Goldilocks4>::new(inner_msg_len);
 	let code = Arc::new(InterleavedCode::new(inner, INTERLEAVING));
 	let vc = Arc::new(MerkleVc::new(inner_msg_len * RATE_INV));
 	let cc = CodeCommitment::new(code, vc);
-	let (root, _state) = cc.commit_only(c_pad.to_vec());
+	let (root, _state) = cc.commit_only(c.to_vec());
 	root
 }
 
@@ -141,22 +135,13 @@ mod tests {
 	use rand_chacha::ChaCha20Rng;
 
 	#[test]
-	fn derive_c_pad_is_deterministic() {
+	fn derive_c_is_deterministic() {
 		let params = Params::new(1);
 		let sigma = [42u8; 32];
-		let a = derive_c_pad(&sigma, params);
-		let b = derive_c_pad(&sigma, params);
+		let a = derive_c(&sigma, params);
+		let b = derive_c(&sigma, params);
 		assert_eq!(a, b);
-		assert_eq!(a.len(), params.n());
-	}
-
-	#[test]
-	fn derive_c_pad_seed_and_mask_streams_differ() {
-		let params = Params::new(1);
-		let sigma = [99u8; 32];
-		let c_pad = derive_c_pad(&sigma, params);
-		let m = params.m();
-		assert_ne!(&c_pad[..1], &c_pad[m..m + 1]);
+		assert_eq!(a.len(), params.m());
 	}
 
 	#[test]
@@ -176,7 +161,7 @@ mod tests {
 		let mut rng = ChaCha20Rng::seed_from_u64(1);
 		let (pk, sk, cache) = keygen(&mut rng, params);
 		let cache2 = SignerCache::from_secret(&sk, params);
-		assert_eq!(cache.c_pad, cache2.c_pad);
-		assert_eq!(pk.root, commit_c_pad_root(&cache2.c_pad, params));
+		assert_eq!(cache.c, cache2.c);
+		assert_eq!(pk.root, commit_c_root(&cache2.c, params));
 	}
 }

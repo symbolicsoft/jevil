@@ -18,10 +18,12 @@ use crate::{Error, PublicKey};
 ///
 /// - [`Error::ParamsMismatch`] if `params.n_star != pk.n_star`,
 /// - [`Error::InvalidLength`] if `sig.y_values.len() != Params::K`,
-/// - [`Error::NonCanonicalField`] if a y-value isn't a canonical extension
-///   element,
 /// - [`Error::VerificationFailed`] for any cryptographic failure (tampered
 ///   y-values, malformed proof, wrong message, …).
+///
+/// [`Error::NonCanonicalField`] is **not** reachable from `verify`: a
+/// `Goldilocks4` cannot exist non-canonically, so the only failure mode of
+/// that kind is at signature *parse* time in [`Signature::from_bytes`].
 ///
 /// `verify` does **not** distinguish *which* check failed — all
 /// cryptographic-failure paths collapse to the single
@@ -34,11 +36,9 @@ pub fn verify(pk: &PublicKey, params: Params, msg: &[u8], sig: &Signature) -> Re
 	if sig.y_values.len() != k {
 		return Err(Error::InvalidLength);
 	}
-	for y in &sig.y_values {
-		if Goldilocks4::from_bytes(&y.to_bytes()).is_none() {
-			return Err(Error::NonCanonicalField);
-		}
-	}
+	// Canonicality of `sig.y_values` is structural: a `Goldilocks4` cannot
+	// exist with a non-canonical limb (parser enforces it in
+	// `Signature::from_bytes`; `Goldilocks::new` reduces). No re-check here.
 
 	// 1. Re-derive positions, x_t, β_t, and v = Σ β_t · y_t.
 	let positions = derive_positions(&pk.root, msg, k, params.t());
@@ -61,12 +61,12 @@ pub fn verify(pk: &PublicKey, params: Params, msg: &[u8], sig: &Signature) -> Re
 		.instance(&prefix);
 	let mut transcript = domain.std_verifier(&sig.whir_proof);
 
-	// 3. Build the symbolic α handle (O(K · ν') verifier — no length-N alloc).
-	let alpha = BatchedAlpha::new(&xs, betas, params.nu(), params.nu_prime());
+	// 3. Build the symbolic α handle (O(K · ν) verifier — no length-M alloc).
+	let alpha = BatchedAlpha::new(&xs, betas, params.nu());
 	let constraint = LinearConstraint::new(alpha, v);
 
 	// 4. Run WHIR's verifier on top.
-	let whir = ConcreteWhirVerifier::build(params.n(), 32, 64);
+	let whir = ConcreteWhirVerifier::build(params.m(), 32, 64);
 	whir.verify_from_transcript(&mut transcript, constraint)
 		.map_err(|_| Error::VerificationFailed)?;
 	transcript

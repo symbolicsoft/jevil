@@ -16,8 +16,10 @@ pub enum Error {
 	#[error("verifier params do not match the public key's n_star")]
 	ParamsMismatch,
 
-	/// A serialised signature was not exactly `K · 32 + |whir_proof|` bytes,
-	/// or a serialised public key was not exactly 36 bytes.
+	/// A serialised signature did not contain the leading `K · 32` y-bytes,
+	/// or [`crate::verify`] was handed a [`crate::Signature`] whose
+	/// `y_values.len()` differs from `Params::K`. (The 36-byte public key
+	/// parser cannot fail with this — its input is a fixed-size array.)
 	#[error("serialised input has the wrong length")]
 	InvalidLength,
 

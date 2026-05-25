@@ -56,29 +56,29 @@
 //! Jevil takes a single integer parameter `n_star` (the signing budget).
 //! `n_star + 1` must be a power of two — i.e. `n_star ∈ {1, 3, 7, 15, 31, 63,
 //! 127, 255, 511, 1023, …}`; [`Params::new`] panics on any other value to
-//! prevent accidental deployment into the soft-degradation regime (§5.3 of
-//! the paper). Within this set the cliff fires precisely at signature
-//! `n_star + 1`. See [`Params`] for the full parameter derivation.
+//! prevent accidental deployment into the soft-degradation regime. Within
+//! this set the cliff fires precisely at signature `n_star + 1`. See
+//! [`Params`] for the full parameter derivation.
 //!
 //! Reference sizes at the recommended `K = 16` positions-per-signature:
 //!
-//! | `n_star` | `M`      | `N`      | `T`      | KeyGen | Sig    |
-//! |---------:|---------:|---------:|---------:|-------:|-------:|
-//! |    127   | 2¹¹      | 2¹²      | 2¹⁹      | 0.1 s  | 30 KB  |
-//! |   1023   | 2¹⁴      | 2¹⁵      | 2²²      | 1 s    | 35 KB  |
-//! | 16,383   | 2¹⁸      | 2¹⁹      | 2²⁶      | 30 s   | 45 KB  |
+//! | `n_star` | `M`      | `T`      | KeyGen | Sig    |
+//! |---------:|---------:|---------:|-------:|-------:|
+//! |    127   | 2¹¹      | 2²⁷      | 0.1 s  | 30 KB  |
+//! |   1023   | 2¹⁴      | 2³⁰      | 1 s    | 35 KB  |
+//! | 16,383   | 2¹⁸      | 2³⁴      | 30 s   | 45 KB  |
 //!
 //! ## Construction (one paragraph)
 //!
 //! The secret is a univariate polynomial `f ∈ F[X]` of degree `D = M − 1` over
 //! the quartic Goldilocks extension `F_{q_0^4}` (`|F| ≈ 2^256`), derived
 //! deterministically from a 32-byte seed `σ`. The public key is a WHIR
-//! commitment to the length-`N` vector `c^pad = (c_0, …, c_{M−1}, r_1, …,
-//! r_{N−M})` — `f`'s coefficients padded with uniform random masks. A
-//! signature on a message `M` opens `f` at `K = 16` message-derived positions
-//! via a single batched WHIR linear-form proof. After `n_cliff = ⌈M/K⌉`
-//! signatures the outsider has accumulated ≥ `D + 1` distinct evaluations of
-//! `f` and reconstructs the secret by Lagrange interpolation.
+//! commitment to the length-`M` coefficient vector `c = (c_0, …, c_{M−1})`.
+//! A signature on a message `M` opens `f` at `K = 16` message-derived
+//! positions via a single batched WHIR linear-form proof. After
+//! `n_cliff = ⌈M/K⌉` signatures the outsider has accumulated ≥ `D + 1`
+//! distinct evaluations of `f` and reconstructs the secret by Lagrange
+//! interpolation.
 //!
 //! For the full construction and security analysis see the Jevil paper.
 //!
@@ -129,10 +129,10 @@ pub use crate::verify::verify;
 ///
 /// Layout: 32-byte WHIR commitment root concatenated with a 4-byte little-endian
 /// `n_star`. The signing budget is carried in the public key so that verifiers
-/// can derive every subsidiary parameter (`M`, `N`, `T`, `ν`, `ν'`) from it.
+/// can derive every subsidiary parameter (`M`, `T`, `ν`) from it.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PublicKey {
-	/// 32-byte WHIR commitment to the padded coefficient vector `c^pad`.
+	/// 32-byte WHIR commitment to the coefficient vector `c`.
 	pub root: [u8; 32],
 	/// Signing budget `n*` chosen at [`keygen`].
 	pub n_star: u32,

@@ -29,10 +29,10 @@ fn kat_n_star_3() {
 
 	assert_eq!(
 		pk_hex,
-		"e24d20f1b35319ac0b411fc90dfcb5f2dcf1983af95ec43a8e89735e4e63bc7d03000000"
+		"48aab3aa7dfa38ee13febeacfe957f4ac1a578479c7424a9a2f1e048d0789d4403000000"
 	);
 	assert_eq!(
 		sig_hash,
-		"f48ca354185b3945d1195f83085a2f099e8e211824cc4894e6e2505c987e9cf0"
+		"db4dac62deb6bf089d642f15fc1c478f9297b667a3b18cac5156df5363c54460"
 	);
 }

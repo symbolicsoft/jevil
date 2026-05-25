@@ -84,7 +84,7 @@ pub(crate) fn derive_betas(root: &[u8; 32], msg: &[u8], ys: &[Goldilocks4]) -> V
 		if betas.len() == k {
 			return betas;
 		}
-		buffer_size = (buffer_size * 2).max(64);
+		buffer_size *= 2;
 		refill_tag += 1;
 	}
 }

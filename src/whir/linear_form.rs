@@ -1,12 +1,11 @@
 //! Linear forms and their verifier-side "handles".
 //!
-//! A *linear form* is a vector `α ∈ F^N` defining the functional `m ↦ ⟨m, α⟩`.
-//! WHIR opens claims of the shape `⟨c^pad, α⟩ = v` against a committed
-//! `c^pad`.
+//! A *linear form* is a vector `α ∈ F^M` defining the functional `m ↦ ⟨m, α⟩`.
+//! WHIR opens claims of the shape `⟨c, α⟩ = v` against a committed `c`.
 //!
-//! - On the prover side, [`LinearForm`] is the concrete length-`N` vector.
-//! - On the verifier side, we never want to materialise an `N`-vector when
-//!   `N` is `2¹⁵` or larger. Instead the verifier uses the
+//! - On the prover side, [`LinearForm`] is the concrete length-`M` vector.
+//! - On the verifier side, we never want to materialise an `M`-vector when
+//!   `M` is `2¹⁴` or larger. Instead the verifier uses the
 //!   [`LinearFormHandle`] trait: a *symbolic* description of `α` that knows
 //!   how to compute its multilinear-extension fold at any sumcheck challenge
 //!   point on demand. [`FoldedFormHandle`] and [`LinearCombinationForm`] are

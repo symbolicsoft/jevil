@@ -100,8 +100,7 @@ cargo run --release --example cliff -- 3  # public-key recovery demo
 The secret is a univariate polynomial `f ∈ F[X]` of degree `D = M − 1` over
 the quartic Goldilocks extension `F_{q₀^4}`, derived deterministically from
 the 32-byte secret seed. The public key is a [WHIR][whir] commitment to the
-length-`N` coefficient vector `c^pad = (c_0, …, c_{M−1}, r_1, …, r_{N−M})` —
-`f`'s coefficients padded with uniform random masks.
+length-`M` coefficient vector `c = (c_0, …, c_{M−1})`.
 
 A signature on message `M` opens `f` at `K = 16` message-derived positions
 `x_1, …, x_K`, revealing `(y_t)_{t=1..K} = (f(x_t))_{t=1..K}` together with a
@@ -116,9 +115,8 @@ observer holds at most `nK` distinct `(x, f(x))` pairs:
   `O(D²)` field operations, and the secret becomes publicly known.
 
 The cliff is *intrinsic to the public key*. An adversarial signer cannot
-extend it by stuffing higher-degree coefficients into the mask region, by
-committing to a non-codeword, or by reusing proofs across roots — see the
-paper for the precise cap-binding lemma.
+extend it by committing to a non-codeword or by reusing proofs across
+roots — see the paper for the precise cap-binding lemma.
 
 ## Parameter selection
 
@@ -140,19 +138,17 @@ removes that footgun.
 From `n_star` every other quantity is derived:
 
 - `M = (n_star + 1) · K` — the cliff dimension; degree bound is `D = M − 1`.
-- `N = 2^⌈log₂(M + 384)⌉` — the commit dimension (extra 384 entries hold ZK
-  masks).
 - `T = nextpow2(n_star · K · 2^{128/K})` — the HORS-coverage position space.
 - `n_cliff = M / K = n_star + 1` — the first signature index at which the
   worst-case outsider recovers `f`.
 
 Reference sizes at `K = 16`:
 
-| `n_star` | `M`    | `N`    | `T`    | KeyGen | Sig    |
-|---------:|-------:|-------:|-------:|-------:|-------:|
-| 127      | 2¹¹    | 2¹²    | 2¹⁹    | 0.1 s  | 30 KB  |
-| 1023     | 2¹⁴    | 2¹⁵    | 2²²    | 1 s    | 35 KB  |
-| 16,383   | 2¹⁸    | 2¹⁹    | 2²⁶    | 30 s   | 45 KB  |
+| `n_star` | `M`    | `T`    | KeyGen | Sig    |
+|---------:|-------:|-------:|-------:|-------:|
+| 127      | 2¹¹    | 2¹⁹    | 0.1 s  | 30 KB  |
+| 1023     | 2¹⁴    | 2²²    | 1 s    | 35 KB  |
+| 16,383   | 2¹⁸    | 2²⁶    | 30 s   | 45 KB  |
 
 ## API overview
 
@@ -212,11 +208,10 @@ signer bit-for-bit.
 ### Hiding
 
 Each signature reveals exactly `K` `(x_t, y_t)` pairs and one WHIR proof.
-The mask coefficients absorb WHIR's codeword leakage, so the joint
-distribution of revealed Reed–Solomon symbols is uniform conditioned on `f`
-(below the cliff). The verifier's evaluation `α(r*)` of the symbolic
-batched α is independent of the mask region by construction (`u(x)` is
-identically zero on positions `≥ M`).
+Below the cliff, the WHIR proof is honest-verifier zero-knowledge with
+respect to a query-bounded distinguisher: the joint distribution of revealed
+codeword symbols and sumcheck round polynomials is perfectly simulable from
+`(pk, msg, (y_t))` alone.
 
 ### Post-quantum security
 

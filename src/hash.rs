@@ -6,7 +6,7 @@
 //!   capacity 4, S-box `x⁷`). Arithmetic-friendly, used *only* inside WHIR for
 //!   its codeword vector commitment.
 //! - [`Family::Xof`]: **SHAKE256** (extendable-output). Used for seed
-//!   expansion, mask derivation, position derivation, and Fiat–Shamir.
+//!   expansion, position derivation, and Fiat–Shamir.
 //!
 //! Every hash invocation is prefixed by an 8-byte ASCII *domain tag* that
 //! separates the four logical uses. The tags are exposed as module-level
@@ -36,10 +36,8 @@ use shake::{ExtendableOutput, Shake256, Update, XofReader};
 // Domain tags (paper §2.2)
 // ---------------------------------------------------------------------------
 
-/// Domain tag for the seed-derived honest polynomial coefficients (XOF).
+/// Domain tag for the seed-derived polynomial coefficients (XOF).
 pub(crate) const JV_SEED: [u8; 8] = *b"JV-SEED\0";
-/// Domain tag for the seed-derived ZK mask coefficients (XOF).
-pub(crate) const JV_MASK: [u8; 8] = *b"JV-MASK\0";
 /// Domain tag for per-message position derivation (XOF).
 pub(crate) const JV_POSN: [u8; 8] = *b"JV-POSN\0";
 /// Domain tag for the Fiat–Shamir batching challenges (XOF).
@@ -186,7 +184,7 @@ mod tests {
 	#[test]
 	fn domain_tags_separate() {
 		let a = hash(Family::Xof, JV_SEED, &[b"x"], 32);
-		let b = hash(Family::Xof, JV_MASK, &[b"x"], 32);
+		let b = hash(Family::Xof, JV_POSN, &[b"x"], 32);
 		assert_ne!(a, b);
 	}
 
@@ -218,7 +216,6 @@ mod tests {
 	#[test]
 	fn spec_tags_are_present() {
 		assert_eq!(&JV_SEED, b"JV-SEED\0");
-		assert_eq!(&JV_MASK, b"JV-MASK\0");
 		assert_eq!(&JV_POSN, b"JV-POSN\0");
 		assert_eq!(&JV_FSCH, b"JV-FSCH\0");
 		assert_eq!(&JV_WHIR, b"JV-WHIR\0");

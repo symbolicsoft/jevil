@@ -549,7 +549,9 @@ fn goldilocks_sqrt(target: Goldilocks) -> Option<Goldilocks> {
 /// Position-to-field map `ψ_T(i) = g_T^i`, where `g_T` is the primitive `T`-th
 /// root of unity in `F_{q₀⁴}` returned by [`Goldilocks4::two_adic_generator`].
 ///
-/// `T` must be a power of two and `log₂(T) ≤ 32`. `ψ` is deterministic,
+/// `T` must be a power of two and `log₂(T) ≤ 34` (the 2-adicity of
+/// `F_{q₀⁴}^×`; the paper's largest reference deployment `n* = 16_383` hits
+/// `log₂(T) = 34`). `ψ` is deterministic,
 /// identical for every signer, and injective on `{0, …, T − 1}`. This is
 /// consistent with [`Goldilocks4::ntt`]: an NTT of a length-`T` vector produces
 /// evaluations at `ψ_T(0), ψ_T(1), …, ψ_T(T − 1)` using the same generator.
