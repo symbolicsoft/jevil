@@ -13,9 +13,10 @@
 //!   every deployable `n_star`; the runtime check is here so that downstream
 //!   simulator code can panic loudly on any violation.
 //! - [`simulate_joint_codeword`] — the multi-opening counterpart of
-//!   Prop 3.19's `Sim_C`: samples `|S|` uniformly random field elements
-//!   (deterministically seeded by `derive_joint_seed`) representing the
-//!   public-key codeword's values at the joint query set.
+//!   Prop 3.19's `Sim_C`: samples `|S|` uniformly random field elements from
+//!   a caller-provided CSPRNG, representing the public-key codeword's values
+//!   at the joint query set. Callers typically seed the CSPRNG with
+//!   [`derive_joint_seed`] applied to the per-opening challenge seeds.
 //!
 //! Together these are the deterministic building blocks any byte-equal NARG
 //! simulator must compose, and they witness the core HVZK property at the
@@ -44,8 +45,13 @@
 //! `n_star ∈ {1, 7, 31, 127, 1023}` provide empirical confirmation that the
 //! composed protocol accepts.
 
-use rand::SeedableRng;
-use rand_chacha::ChaCha20Rng;
+// The simulator's helpers are exercised only by the in-module test suite and
+// by the byte-level NARG simulator that will land in a follow-up. Until that
+// arrives there are no production callers, so suppress the dead-code lint at
+// the module level rather than per-item.
+#![allow(dead_code)]
+
+use rand::{CryptoRng, RngCore};
 
 use super::encoding::ZkEncoding;
 use crate::field::Goldilocks4;
@@ -53,7 +59,6 @@ use crate::params::Params;
 
 /// Public input to the simulator — everything an outside observer sees about
 /// one Jevil signature, minus the WHIR proof itself.
-#[allow(dead_code)] // Consumed by `simulate_single` (stub) and any future byte-level simulator.
 pub(crate) struct PublicClaim {
 	/// The 32-byte zk-WHIR commitment root (= `PublicKey::root`).
 	pub root: [u8; 32],
@@ -65,7 +70,6 @@ pub(crate) struct PublicClaim {
 
 /// Simulated transcript: the NARG bytes a real signer would write to the
 /// spongefish transcript for the given `(public_claim, challenge_seed)`.
-#[allow(dead_code)] // Returned by `simulate_single` (stub) and any future byte-level simulator.
 pub(crate) struct SimulatedTranscript {
 	pub narg_bytes: Vec<u8>,
 }
@@ -111,18 +115,21 @@ pub(crate) fn derive_joint_seed(seeds: &[[u8; 32]]) -> [u8; 32] {
 /// under Lemma 11.
 ///
 /// Uses [`ZkEncoding::simulate`] (Prop 3.19) to draw `|joint_query_set|`
-/// uniformly random field elements seeded deterministically by
-/// [`derive_joint_seed`] applied to the per-opening seeds. For Reed–Solomon
+/// uniformly random field elements from `rng`. For Reed–Solomon
 /// (`ζ_C = 0`) the resulting distribution is *identical* to the joint
 /// distribution of `Enc_C(c, r_zk)[joint_query_set]` over uniform `r_zk`
 /// whenever the Lemma 11 hypothesis holds — i.e. perfect HVZK at the
 /// per-position level.
 ///
+/// Callers should seed `rng` with [`derive_joint_seed`] applied to the
+/// per-opening challenge seeds to keep `Sim_C` deterministic in the
+/// challenge stream.
+///
 /// Panics if [`lemma_11_hypothesis_holds`] would return `false`.
-pub(crate) fn simulate_joint_codeword(
+pub(crate) fn simulate_joint_codeword<R: RngCore + CryptoRng>(
 	params: Params,
 	joint_query_set: &[usize],
-	challenge_seeds: &[[u8; 32]],
+	rng: &mut R,
 ) -> Vec<Goldilocks4> {
 	assert!(
 		lemma_11_hypothesis_holds(params, joint_query_set.len()),
@@ -132,14 +139,12 @@ pub(crate) fn simulate_joint_codeword(
 		params.n() - params.m()
 	);
 	let zk_enc = ZkEncoding::new(params.m(), params.n() - params.m());
-	let mut rng = ChaCha20Rng::from_seed(derive_joint_seed(challenge_seeds));
-	zk_enc.simulate(joint_query_set, &mut rng)
+	zk_enc.simulate(joint_query_set, rng)
 }
 
 /// Single-opening NARG-byte simulator — stub. See the module docstring for
 /// what blocks a real implementation. Callers needing the *algebraic*
 /// per-position simulator should use [`simulate_joint_codeword`].
-#[allow(dead_code)] // Pending byte-level simulator implementation.
 pub(crate) fn simulate_single(
 	_params: Params,
 	_claim: &PublicClaim,
@@ -162,7 +167,6 @@ pub(crate) fn simulate_single(
 ///
 /// Panics if `claims.len()` exceeds `params.n_star` (the budget) or if
 /// `claims.len() ≠ challenge_seeds.len()`.
-#[allow(dead_code)] // Pending byte-level simulator implementation.
 pub(crate) fn simulate_multi(
 	params: Params,
 	claims: &[PublicClaim],
@@ -191,6 +195,12 @@ pub(crate) fn simulate_multi(
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use rand::SeedableRng;
+	use rand_chacha::ChaCha20Rng;
+
+	fn rng_from_seeds(seeds: &[[u8; 32]]) -> ChaCha20Rng {
+		ChaCha20Rng::from_seed(derive_joint_seed(seeds))
+	}
 
 	#[test]
 	fn joint_seed_is_deterministic() {
@@ -233,8 +243,8 @@ mod tests {
 	fn joint_codeword_simulator_returns_query_set_length() {
 		let params = Params::new(7);
 		let positions: Vec<usize> = (0..32).collect();
-		let seeds = vec![[5u8; 32]; params.n_star as usize];
-		let sample = simulate_joint_codeword(params, &positions, &seeds);
+		let mut rng = rng_from_seeds(&vec![[5u8; 32]; params.n_star as usize]);
+		let sample = simulate_joint_codeword(params, &positions, &mut rng);
 		assert_eq!(sample.len(), positions.len());
 	}
 
@@ -243,8 +253,8 @@ mod tests {
 		let params = Params::new(3);
 		let positions: Vec<usize> = (0..16).collect();
 		let seeds = vec![[9u8; 32]; params.n_star as usize];
-		let s1 = simulate_joint_codeword(params, &positions, &seeds);
-		let s2 = simulate_joint_codeword(params, &positions, &seeds);
+		let s1 = simulate_joint_codeword(params, &positions, &mut rng_from_seeds(&seeds));
+		let s2 = simulate_joint_codeword(params, &positions, &mut rng_from_seeds(&seeds));
 		assert_eq!(s1, s2);
 	}
 
@@ -254,8 +264,8 @@ mod tests {
 		let positions: Vec<usize> = (0..16).collect();
 		let seeds_a = vec![[0u8; 32]; params.n_star as usize];
 		let seeds_b = vec![[1u8; 32]; params.n_star as usize];
-		let s1 = simulate_joint_codeword(params, &positions, &seeds_a);
-		let s2 = simulate_joint_codeword(params, &positions, &seeds_b);
+		let s1 = simulate_joint_codeword(params, &positions, &mut rng_from_seeds(&seeds_a));
+		let s2 = simulate_joint_codeword(params, &positions, &mut rng_from_seeds(&seeds_b));
 		assert_ne!(s1, s2);
 	}
 
@@ -265,8 +275,8 @@ mod tests {
 		let params = Params::new(3);
 		let over = params.n() - params.m() + 1;
 		let positions: Vec<usize> = (0..over).collect();
-		let seeds = vec![[0u8; 32]; params.n_star as usize];
-		let _ = simulate_joint_codeword(params, &positions, &seeds);
+		let mut rng = rng_from_seeds(&vec![[0u8; 32]; params.n_star as usize]);
+		let _ = simulate_joint_codeword(params, &positions, &mut rng);
 	}
 
 	#[test]
