@@ -268,11 +268,11 @@ impl ConcreteWhirProtocol {
 		initial_constraint: LinearForm<Goldilocks4>,
 		mask_seed: &[u8; 32],
 	) {
-		// HVZK Stage A: each sumcheck commits k mask oracles, runs the
-		// HVZK round-poly math, and pushes k masks onto a per-signature
-		// mask_stack. The base case consumes the full stack via the joint
-		// Construction 7.2 target check. The codeswitch keeps plain OOD
-		// (Construction 9.7's padding mask is Stage B).
+		// Each sumcheck commits k mask oracles, runs the HVZK round-poly
+		// math, and pushes k masks onto a per-signature mask_stack. Each
+		// codeswitch commits its Construction 9.7 padding mask and pushes
+		// that onto the stack too. The base case consumes the full stack
+		// via the joint Construction 7.2 target check.
 		let initial_state = self.initial_commitment.commit(transcript, msg);
 		let mut mask_stack = MaskStack::new();
 

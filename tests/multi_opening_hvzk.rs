@@ -1,26 +1,21 @@
-//! Lemma 11 of `jevil_paper.tex` (multi-opening HVZK) — the joint distribution
-//! of `n*` signatures against a shared `(pk, root)` is perfectly simulable from
-//! the public tuple `(pk, M_i, (y_t^{(i)}))_i` alone, with `ζ = 0` for the
-//! Reed–Solomon instantiation.
+//! Protocol-level exercises of the multi-opening regime (Lemma 11 of the
+//! Jevil paper). Asserts the properties that distinguish multi-opening from
+//! single-opening signing:
 //!
-//! This file holds the protocol-level exercises of the multi-opening regime:
-//!  - **`flagship_round_trip_at_full_budget`** verifies every signature in a
-//!    full `n*` budget run, demonstrating that multi-opening composition of
-//!    Constructions 6.3, 7.2, and Theorem 4.5 produces accepting transcripts
-//!    end-to-end.
-//!  - **`distinct_messages_produce_distinct_proofs`** asserts that signatures
-//!    on different messages produce byte-distinct WHIR proofs while all
-//!    verifying against the same public key — a necessary consequence of fresh
-//!    per-signature mask randomness threaded through the joint mask stack.
-//!  - **`distinct_seeds_produce_distinct_signatures`** asserts that two
-//!    independently-keyed signers produce byte-distinct signatures even on
-//!    the same message — necessary consequence of Prop 3.19's `r_zk`
-//!    distinguishing the underlying commitments.
-//!
-//! The strong simulator-equivalence assertion (asserting byte-equality of
-//! every real transcript against the explicit Lemma 11 simulator's output
-//! for a fixed challenge seed) is gated on the simulator module landing in
-//! `src/whir/simulator.rs` — pending follow-up.
+//! - `flagship_round_trip_at_full_budget` — every signature in a full `n*`
+//!   budget run verifies, demonstrating that Constructions 6.3, 7.2, 9.7,
+//!   and Theorem 4.5 compose into accepting transcripts end-to-end.
+//! - `distinct_messages_produce_distinct_proofs` — signatures on different
+//!   messages produce byte-distinct WHIR proofs while all verifying against
+//!   the same public key.
+//! - `distinct_seeds_produce_distinct_signatures` — independently-keyed
+//!   signers produce byte-distinct signatures even on the same message.
+//! - `cross_verification_rejected` — a signature from `sk_A` does NOT verify
+//!   against `pk_B`; cap-binding is not transferable across keys.
+//! - `deterministic_signatures_under_full_budget` — repeating the full
+//!   (keygen + `n*` signs) run with the same RNG seed yields byte-identical
+//!   artifacts; HVZK randomness is derived from the per-signature seed, not
+//!   from the OS RNG.
 
 use jevil::{Params, keygen, sign, verify};
 use rand::SeedableRng;

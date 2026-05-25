@@ -122,6 +122,3 @@ KAT_UPDATE=1 cargo test --test kat -- --nocapture     # regenerate fixtures
 
 Licensed under either of [Apache License, Version 2.0](LICENSE-APACHE) or
 [MIT license](LICENSE-MIT) at your option.
-
-[whir]: https://eprint.iacr.org/2024/1586
-[zkwhir]: https://eprint.iacr.org/2026/391
