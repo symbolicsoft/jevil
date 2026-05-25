@@ -19,6 +19,7 @@ use crate::params::Params;
 /// "JV-OPEN "                (8 bytes, paper §2.2 space-padded tag)
 /// params.canonical_bytes()  (4 bytes — n_star LE; K is the global constant)
 /// root                      (32 bytes)
+/// w.to_bytes()              (32 bytes — OOD value f(z) from pk)
 /// (msg.len() as u64).to_le_bytes()  (8 bytes)
 /// msg                       (msg.len() bytes)
 /// y_1.to_bytes(), …, y_K    (K · 32 bytes)
@@ -26,13 +27,15 @@ use crate::params::Params;
 pub(crate) fn prefix_bytes(
 	params: Params,
 	root: &[u8; 32],
+	w: &Goldilocks4,
 	msg: &[u8],
 	ys: &[Goldilocks4],
 ) -> Vec<u8> {
-	let mut buf = Vec::with_capacity(8 + 4 + 32 + 8 + msg.len() + ys.len() * 32);
+	let mut buf = Vec::with_capacity(8 + 4 + 32 + 32 + 8 + msg.len() + ys.len() * 32);
 	buf.extend_from_slice(&JV_OPEN);
 	buf.extend_from_slice(&params.canonical_bytes());
 	buf.extend_from_slice(root);
+	buf.extend_from_slice(&w.to_bytes());
 	buf.extend_from_slice(&(msg.len() as u64).to_le_bytes());
 	buf.extend_from_slice(msg);
 	for y in ys {
@@ -41,26 +44,29 @@ pub(crate) fn prefix_bytes(
 	buf
 }
 
-/// Derive `K = ys.len()` Fiat–Shamir batching coefficients `(β_1, …, β_K)`.
+/// Derive `K + 1 = ys.len() + 1` Fiat–Shamir batching coefficients
+/// `(β_1, …, β_K, β_{K+1})`.
 ///
 /// Uses the `JV-FSCH` SHAKE256 stream with per-limb rejection sampling, so
 /// each `β_t` is uniform in `F_{q₀⁴}`. The hashed sequence is exactly the
 /// spec §4.2 step 4 layout — `root`, `msg`, then each `y_t` — with the length
-/// prefix supplied automatically by [`crate::hash::hash`]'s framing.
+/// prefix supplied automatically by [`crate::hash::hash`]'s framing. The
+/// trailing `β_{K+1}` weights the OOD constraint `g(z) = w` per paper §4.2
+/// step 5 (`α += β_{K+1} · u(z)`, `v += β_{K+1} · w`).
 pub(crate) fn derive_betas(root: &[u8; 32], msg: &[u8], ys: &[Goldilocks4]) -> Vec<Goldilocks4> {
-	let k = ys.len();
+	let want = ys.len() + 1;
 	let y_bytes: Vec<[u8; 32]> = ys.iter().map(|y| y.to_bytes()).collect();
 
-	let mut inputs: Vec<&[u8]> = Vec::with_capacity(2 + k);
+	let mut inputs: Vec<&[u8]> = Vec::with_capacity(2 + ys.len());
 	inputs.push(root);
 	inputs.push(msg);
 	for yb in &y_bytes {
 		inputs.push(yb);
 	}
 
-	// Start with enough output for K Goldilocks4 elements (32 bytes each) plus
-	// 2× headroom for rejection; double on each miss.
-	let mut buffer_size = k * 32 * 2 + 32;
+	// Start with enough output for `want` Goldilocks4 elements (32 bytes
+	// each) plus 2× headroom for rejection; double on each miss.
+	let mut buffer_size = want * 32 * 2 + 32;
 	let mut refill_tag = 0u64;
 	loop {
 		let tag = refill_tag.to_le_bytes();
@@ -72,16 +78,16 @@ pub(crate) fn derive_betas(root: &[u8; 32], msg: &[u8], ys: &[Goldilocks4]) -> V
 			hash(Family::Xof, JV_FSCH, &alt, buffer_size)
 		};
 
-		let mut betas = Vec::with_capacity(k);
+		let mut betas = Vec::with_capacity(want);
 		let mut cursor = 0usize;
-		while betas.len() < k && cursor + 32 <= stream.len() {
+		while betas.len() < want && cursor + 32 <= stream.len() {
 			let chunk = &stream[cursor..cursor + 32];
 			cursor += 32;
 			if let Some(g) = Goldilocks4::from_bytes(chunk) {
 				betas.push(g);
 			}
 		}
-		if betas.len() == k {
+		if betas.len() == want {
 			return betas;
 		}
 		buffer_size *= 2;
@@ -108,7 +114,8 @@ mod tests {
 		let ys = vec![g(1), g(2), g(3)];
 		let a = derive_betas(&[0u8; 32], b"hello", &ys);
 		let b = derive_betas(&[0u8; 32], b"hello", &ys);
-		assert_eq!(a.len(), 3);
+		// K + 1 betas: K for the message-derived points, +1 for the OOD term.
+		assert_eq!(a.len(), 4);
 		assert_eq!(a, b);
 	}
 
@@ -139,15 +146,17 @@ mod tests {
 	fn prefix_bytes_layout() {
 		let params = Params::new(3);
 		let root = [7u8; 32];
+		let w = g(0xabcd);
 		let msg = b"hi";
 		let ys = vec![g(0xff), g(0xee)];
-		let p = prefix_bytes(params, &root, msg, &ys);
-		// 8 + 4 + 32 + 8 + 2 + 2·32 = 118
-		assert_eq!(p.len(), 118);
+		let p = prefix_bytes(params, &root, &w, msg, &ys);
+		// 8 + 4 + 32 + 32 + 8 + 2 + 2·32 = 150
+		assert_eq!(p.len(), 150);
 		assert_eq!(&p[..8], b"JV-OPEN ");
 		assert_eq!(&p[8..12], &params.canonical_bytes());
 		assert_eq!(&p[12..44], &root);
-		assert_eq!(&p[44..52], &(2u64).to_le_bytes());
-		assert_eq!(&p[52..54], msg);
+		assert_eq!(&p[44..76], &w.to_bytes());
+		assert_eq!(&p[76..84], &(2u64).to_le_bytes());
+		assert_eq!(&p[84..86], msg);
 	}
 }

@@ -10,7 +10,7 @@
 //!   prover-randomness derivation.
 //!
 //! Every hash invocation is prefixed by an 8-byte ASCII *domain tag* that
-//! separates the seven logical uses (paper §2.2). The tags are exposed as
+//! separates the eight logical uses (paper §2.2). The tags are exposed as
 //! module-level constants below.
 //!
 //! ## Serialisation format
@@ -66,6 +66,16 @@ pub(crate) const JV_OPEN: [u8; 8] = *b"JV-OPEN ";
 /// `0x20` bytes pad the seven-character `JV-OPRD` ASCII tag out to the
 /// fixed 8-byte slot.
 pub(crate) const JV_OPRD: [u8; 8] = *b"JV-OPRD ";
+/// Domain tag for the OOD binding point derivation (XOF). Used by
+/// [`crate::keygen`] to derive the out-of-domain point `z ∈ F` from
+/// `mathsf{root}` and by [`crate::verify`] to re-derive the same `z`
+/// (the signer never transmits it). Bound by the OOD value `w = f(z)`
+/// stored in the public key, this collapses an outsider's cap-binding
+/// extraction from "needs ≥ ⌈M/K⌉ accepting signatures" to "one accepting
+/// signature suffices" (paper §5.1, Theorem 13). The trailing three
+/// `0x20` bytes pad the five-character `JV-OOD` ASCII tag out to the
+/// fixed 8-byte slot.
+pub(crate) const JV_OOD: [u8; 8] = *b"JV-OOD  ";
 
 // ---------------------------------------------------------------------------
 // Hash family selector
@@ -245,9 +255,10 @@ mod tests {
 		assert_eq!(&JV_WHIR, b"JV-WHIR ");
 		assert_eq!(&JV_OPEN, b"JV-OPEN ");
 		assert_eq!(&JV_OPRD, b"JV-OPRD ");
+		assert_eq!(&JV_OOD, b"JV-OOD  ");
 		// Pairwise distinct as 8-byte strings.
-		let tags: [&[u8; 8]; 7] = [
-			&JV_SEED, &JV_RZK, &JV_POSN, &JV_FSCH, &JV_WHIR, &JV_OPEN, &JV_OPRD,
+		let tags: [&[u8; 8]; 8] = [
+			&JV_SEED, &JV_RZK, &JV_POSN, &JV_FSCH, &JV_WHIR, &JV_OPEN, &JV_OPRD, &JV_OOD,
 		];
 		for i in 0..tags.len() {
 			for j in (i + 1)..tags.len() {

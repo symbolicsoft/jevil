@@ -32,7 +32,7 @@
 //! - **Post-quantum.** All primitives (Poseidon2, SHAKE256, WHIR) are
 //!   plausibly post-quantum at 128-bit classical security (≥ 85 bits quantum
 //!   at the recommended capacity; raise capacity for 128-bit quantum).
-//! - **Compact public keys** (~36 B) and **moderate signatures** (~30–50 KB).
+//! - **Compact public keys** (~68 B) and **moderate signatures** (~45–70 KB).
 //!
 //! ## Quick start
 //!
@@ -64,9 +64,9 @@
 //!
 //! | `n_star` | `M`      | `T`      | KeyGen | Sig    |
 //! |---------:|---------:|---------:|-------:|-------:|
-//! |    127   | 2¹¹      | 2²⁷      | 0.1 s  | 30 KB  |
-//! |   1023   | 2¹⁴      | 2³⁰      | 1 s    | 35 KB  |
-//! | 16,383   | 2¹⁸      | 2³⁴      | 30 s   | 45 KB  |
+//! |    127   | 2¹¹      | 2²⁷      | 0.2 s  | 45 KB  |
+//! |   1023   | 2¹⁴      | 2³⁰      | 2 s    | 55 KB  |
+//! | 16,383   | 2¹⁸      | 2³⁴      | 60 s   | 70 KB  |
 //!
 //! ## Construction (one paragraph)
 //!
@@ -129,13 +129,15 @@ pub use crate::params::Params;
 pub use crate::sign::{Signature, sign};
 pub use crate::verify::verify;
 
-/// A Jevil public key. Realizes the `pk = (root, n*)` of paper §3.3,
+/// A Jevil public key. Realizes the `pk = (root, w, n*)` of paper §3.3,
 /// Construction 4 (`KeyGen`).
 ///
-/// Layout: 32-byte zk-WHIR commitment root concatenated with a 4-byte
-/// little-endian `n_star`. The signing budget is carried in the public key
-/// so that verifiers can derive every subsidiary parameter (`M`, `T`, `ν`,
-/// the commit dimension `N`) from it.
+/// Layout: 32-byte zk-WHIR commitment root, 32-byte OOD value
+/// `w = f(z) ∈ F`, and a 4-byte little-endian `n_star`. The OOD point `z`
+/// itself is not transmitted — both signer and verifier re-derive it from
+/// `root` via the `JV-OOD` SHAKE256 stream. The signing budget is carried
+/// in the public key so that verifiers can derive every subsidiary
+/// parameter (`M`, `T`, `ν`, the commit dimension `N`) from it.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PublicKey {
 	/// 32-byte zk-WHIR commitment root over the coefficient vector
@@ -143,29 +145,40 @@ pub struct PublicKey {
 	/// every accepting opening against this root reveals an evaluation of
 	/// a degree-≤`D` polynomial.
 	pub root: [u8; 32],
+	/// OOD value `w = f(z) ∈ F` where `z` is derived from `root` via
+	/// `JV-OOD`. Bound by the cap-binding theorem to be one publicly-known
+	/// evaluation pair `(z, f(z))` of the committed polynomial; lets a
+	/// single accepting signature pin down `g` within the proximity ball
+	/// instead of requiring `⌈M/K⌉` accumulating ones (paper §5.1,
+	/// Theorem 13).
+	pub w: Goldilocks4,
 	/// Signing budget `n*` chosen at [`keygen`].
 	pub n_star: u32,
 }
 
 impl PublicKey {
-	/// The fixed serialised length of a `PublicKey`: 36 bytes.
-	pub const BYTES: usize = 36;
+	/// The fixed serialised length of a `PublicKey`: 68 bytes
+	/// (32 root + 32 OOD value `w` + 4 `n_star`).
+	pub const BYTES: usize = 68;
 
-	/// Serialise as `root ‖ n_star.to_le_bytes()`.
+	/// Serialise as `root ‖ w.to_bytes() ‖ n_star.to_le_bytes()`.
 	pub fn to_bytes(&self) -> [u8; Self::BYTES] {
 		let mut out = [0u8; Self::BYTES];
 		out[..32].copy_from_slice(&self.root);
-		out[32..].copy_from_slice(&self.n_star.to_le_bytes());
+		out[32..64].copy_from_slice(&self.w.to_bytes());
+		out[64..].copy_from_slice(&self.n_star.to_le_bytes());
 		out
 	}
 
-	/// Parse exactly 36 bytes back into a `PublicKey`. Always succeeds —
-	/// the layout has no validation beyond length.
-	pub fn from_bytes(b: &[u8; Self::BYTES]) -> Self {
+	/// Parse exactly 68 bytes back into a `PublicKey`. Returns
+	/// [`Error::NonCanonicalField`] if the OOD-value chunk is not a
+	/// canonical `Goldilocks4` encoding.
+	pub fn from_bytes(b: &[u8; Self::BYTES]) -> Result<Self, Error> {
 		let mut root = [0u8; 32];
 		root.copy_from_slice(&b[..32]);
-		let n_star = u32::from_le_bytes(b[32..].try_into().unwrap());
-		Self { root, n_star }
+		let w = Goldilocks4::from_bytes(&b[32..64]).ok_or(Error::NonCanonicalField)?;
+		let n_star = u32::from_le_bytes(b[64..].try_into().unwrap());
+		Ok(Self { root, w, n_star })
 	}
 }
 

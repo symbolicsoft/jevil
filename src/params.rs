@@ -128,18 +128,20 @@ impl Params {
 	/// Worst-case F-linear functionals on the WHIR commit vector `m` that
 	/// one signature transcript exposes — i.e. queries + OOD samples +
 	/// sumcheck round polynomials summed across all codeswitch rounds and
-	/// the final trivial step. The per-round contribution is `32 + η + 4
-	/// = 38` functionals (32 in-domain queries + `η = 2` OOD samples + 4
-	/// sumcheck-poly elements per round), and the codeswitch round count
-	/// is bounded by `R ≤ 9` for any deployable `n_star`. With the
-	/// initial sumcheck (4 functionals) and the final trivial step (~32
-	/// functionals at the leaf), the bound `38 · R + 36 ≤ 400` covers any
-	/// deployable `n_star`.
+	/// the final trivial step. The per-round contribution is bounded by
+	/// `θ + η = 66` functionals (`θ = 64` in-domain queries + `η = 2` OOD
+	/// samples per round), conservatively rounded to `θ_aux ≤ 70` to absorb
+	/// any per-implementation accounting variation. The codeswitch round
+	/// count is bounded by `R ≤ 10` for any deployable `n_star` (largest
+	/// `N ≤ 2^25` at `n* = 16,383`). The base-case term `Q_base ≤ 132`
+	/// covers Construction 7.2: `θ = 64` in-domain spotchecks + `θ_zk = 64`
+	/// mask cross-checks + Merkle companions. The closed-form bound
+	/// `70·R + 132 ≤ 832` covers any deployable `n_star` (paper Eq. 9).
 	///
-	/// We use `512` (next-power-of-two slack above `400`) so multi-signature
+	/// We use `1024` (next power of two above `832`) so multi-signature
 	/// Prop.\ 3.19 hiding holds across `n_star · Q_MAX` cumulative WHIR
 	/// queries to the public-key codeword.
-	pub const Q_MAX: u64 = 512;
+	pub const Q_MAX: u64 = 1024;
 
 	/// `N = 2^ν'` — the WHIR primitive's internal ZK-encoded message
 	/// length per Prop. 3.19 of eprint 2026/391. The primitive samples
@@ -161,14 +163,17 @@ impl Params {
 		1usize << self.nu_prime()
 	}
 
-	/// Message length of the small ZK code `C_zk` used for sumcheck masks
-	/// and codeswitch mask oracles (paper §2.7 footnote: message length
-	/// `O(λ / log log λ)`, rate `1 / log λ`). Fixed at `m_zk = 64` with
-	/// rate `1/4` to match the main code's NTT-friendly geometry.
-	pub const M_ZK: usize = 64;
+	/// Total inner-message length of the small ZK code `C_zk` used for
+	/// sumcheck masks and codeswitch mask oracles (paper §2.3,
+	/// `ℓ_zk := 128 = ℓ_zk^data + t_zk = 64 + 64`). Rate `1/4` matches the
+	/// main code's NTT-friendly geometry; evaluation domain `m_zk =
+	/// ℓ_zk / ρ_zk = 512`.
+	pub const M_ZK: usize = 128;
 
-	/// ZK query budget for `C_zk` itself (Prop. 3.19 with `t_zk = 32`).
-	pub const T_ZK: usize = 32;
+	/// ZK query budget for `C_zk` itself (Prop. 3.19 with `t_zk = 64 ≥ θ`).
+	/// Sized to fully absorb the `θ = 64` in-domain spotchecks per round
+	/// at perfect ZK (`ζ_{C_zk} = 0`).
+	pub const T_ZK: usize = 64;
 
 	/// Degree-bound for sumcheck mask polynomials: `ℓ_zk` per Construction
 	/// 6.3. Picked at `3` (degree-2 univariate, three coefficients) so the
@@ -203,9 +208,9 @@ mod tests {
 		assert_eq!(p.m(), 1 << 14);
 		assert_eq!(p.d(), (1 << 14) - 1);
 		assert_eq!(p.n_cliff(), 1024);
-		// HVZK budget ≥ 1023 · 512 ≈ 524K ⇒ N ≥ 16K + 524K ≈ 2^20.
-		assert_eq!(p.nu_prime(), 20);
-		assert_eq!(p.n(), 1 << 20);
+		// HVZK budget ≥ 1023 · 1024 ≈ 1.05M ⇒ N ≥ 16K + 1.05M ≈ 2^21.
+		assert_eq!(p.nu_prime(), 21);
+		assert_eq!(p.n(), 1 << 21);
 	}
 
 	#[test]

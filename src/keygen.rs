@@ -3,7 +3,7 @@
 use rand::{CryptoRng, RngCore};
 
 use crate::field::Goldilocks4;
-use crate::hash::{Family, JV_SEED, hash};
+use crate::hash::{Family, JV_OOD, JV_SEED, hash};
 use crate::params::Params;
 use crate::whir::{ConcreteWhirProtocol, WhirSignerState};
 use crate::{PublicKey, SecretKey};
@@ -65,13 +65,37 @@ pub fn keygen<R: RngCore + CryptoRng>(
 	let whir = build_whir_protocol(params);
 	let (root, whir_state) = whir.commit(&c, &sigma);
 
+	// Spec §4.1, Construction 4 steps 4–5: derive the OOD binding point
+	// `z` from `root` via `JV-OOD` and publish `w = f(z)` in `pk`.
+	let z = derive_ood_point(&root);
+	let w = horner(&c, z);
+
 	let pk = PublicKey {
 		root,
+		w,
 		n_star: params.n_star,
 	};
 	let sk = SecretKey::from_bytes(sigma);
 	let cache = SignerCache { c, whir_state };
 	(pk, sk, cache)
+}
+
+/// Derive the OOD binding point `z ∈ F` from a zk-WHIR commitment root via
+/// `JV-OOD` SHAKE256 with per-limb rejection sampling. Identical at
+/// `KeyGen` time and at `Verify` time: the verifier never receives `z` on
+/// the wire.
+pub(crate) fn derive_ood_point(root: &[u8; 32]) -> Goldilocks4 {
+	derive_field_elements(root, JV_OOD, 1)[0]
+}
+
+/// Horner evaluation of `Σ_k coeffs[k] · x^k`. Shared between `KeyGen`
+/// (to compute `w = f(z)`) and `Sign` (to compute `y_t = f(x_t)`).
+pub(crate) fn horner(coeffs: &[Goldilocks4], x: Goldilocks4) -> Goldilocks4 {
+	let mut acc = Goldilocks4::ZERO;
+	for c in coeffs.iter().rev() {
+		acc = acc * x + *c;
+	}
+	acc
 }
 
 /// Derive the polynomial coefficient vector `c ∈ F^M` from a 32-byte
@@ -85,16 +109,14 @@ pub(crate) fn derive_coefficient_vector(
 
 pub(crate) fn build_whir_protocol(params: Params) -> ConcreteWhirProtocol {
 	let hvzk_budget = params.n() - params.m();
-	ConcreteWhirProtocol::build(params.m(), hvzk_budget, 32, 64)
+	ConcreteWhirProtocol::build(params.m(), hvzk_budget, 64, 64)
 }
 
-/// Pull `count` uniform `Goldilocks4` elements from the `SHAKE256(tag ‖ σ)`
-/// stream with per-limb rejection sampling.
-fn derive_field_elements(
-	sigma: &[u8; SecretKey::BYTES],
-	tag: [u8; 8],
-	count: usize,
-) -> Vec<Goldilocks4> {
+/// Pull `count` uniform `Goldilocks4` elements from the `SHAKE256(tag ‖ input)`
+/// stream with per-limb rejection sampling. Used with `tag = JV-SEED` to
+/// expand the secret seed into coefficients, and with `tag = JV-OOD` to
+/// derive the OOD binding point `z` from a commitment root.
+fn derive_field_elements(input: &[u8; 32], tag: [u8; 8], count: usize) -> Vec<Goldilocks4> {
 	if count == 0 {
 		return Vec::new();
 	}
@@ -103,9 +125,9 @@ fn derive_field_elements(
 	loop {
 		let extra = refill_tag.to_le_bytes();
 		let stream = if refill_tag == 0 {
-			hash(Family::Xof, tag, &[sigma], buffer_size)
+			hash(Family::Xof, tag, &[input], buffer_size)
 		} else {
-			hash(Family::Xof, tag, &[sigma, &extra], buffer_size)
+			hash(Family::Xof, tag, &[input, &extra], buffer_size)
 		};
 		let mut out = Vec::with_capacity(count);
 		let mut cursor = 0usize;
@@ -148,7 +170,17 @@ mod tests {
 		let (pk_a, _, _) = keygen(&mut a, params);
 		let (pk_b, _, _) = keygen(&mut b, params);
 		assert_eq!(pk_a.root, pk_b.root);
+		assert_eq!(pk_a.w, pk_b.w);
 		assert_eq!(pk_a.n_star, pk_b.n_star);
+	}
+
+	#[test]
+	fn w_matches_horner_on_z() {
+		let params = Params::new(1);
+		let mut rng = ChaCha20Rng::seed_from_u64(11);
+		let (pk, _sk, cache) = keygen(&mut rng, params);
+		let z = derive_ood_point(&pk.root);
+		assert_eq!(pk.w, horner(&cache.c, z));
 	}
 
 	#[test]

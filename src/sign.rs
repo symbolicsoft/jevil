@@ -3,7 +3,7 @@
 use spongefish::domain_separator;
 
 use crate::field::{Goldilocks4, psi};
-use crate::keygen::{SignerCache, build_whir_protocol};
+use crate::keygen::{SignerCache, build_whir_protocol, derive_ood_point, horner};
 use crate::params::Params;
 use crate::positions::derive_positions;
 use crate::transcript::{derive_betas, prefix_bytes};
@@ -83,17 +83,30 @@ pub fn sign(
 
 	// 1. Positions and their ψ-images.
 	let positions = derive_positions(&pk.root, msg, k, t);
-	let xs: Vec<Goldilocks4> = positions.iter().map(|&i| psi(i as u64, t as u64)).collect();
+	let xs_msg: Vec<Goldilocks4> = positions.iter().map(|&i| psi(i as u64, t as u64)).collect();
 
 	// 2. y_t = f(x_t) via Horner over the M coefficients in `cache.c`.
-	let ys: Vec<Goldilocks4> = xs.iter().map(|&x| horner(&cache.c, x)).collect();
+	let ys: Vec<Goldilocks4> = xs_msg.iter().map(|&x| horner(&cache.c, x)).collect();
 
-	// 3. β challenges (verifier re-derives the same vector from
-	//    `(root, msg, ys)`).
+	// 3. Re-derive the OOD point `z` from `pk.root` (Construction 5 step 4 —
+	//    identical derivation to KeyGen, so the signer recomputes the same
+	//    `z` used there to fix `w`). Append `z` to the position list so the
+	//    α-construction loop below produces α = Σ_{t≤K} β_t·u(x_t) +
+	//    β_{K+1}·u(z).
+	let z = derive_ood_point(&pk.root);
+	let mut xs = xs_msg;
+	xs.push(z);
+
+	// 4. β challenges — K+1 of them: β_1..β_K for the message positions plus
+	//    β_{K+1} for the OOD term (verifier re-derives the same vector from
+	//    `(root, msg, ys)`; hash input is unchanged, just one more F-element
+	//    is squeezed).
 	let betas = derive_betas(&pk.root, msg, &ys);
+	debug_assert_eq!(betas.len(), xs.len());
 
-	// 4. Materialise the length-`M` lift `α = Σ_t β_t · u(x_t)` via a
-	//    parallel Horner pass over the K positions. α[k] = Σ_t β_t · x_t^k
+	// 5. Materialise the length-`M` lift α = Σ_t β_t · u(x_t) (plus the
+	//    OOD term β_{K+1}·u(z), since `z` is appended to `xs` above) via a
+	//    parallel Horner pass over the K+1 positions. α[k] = Σ_t β_t · x_t^k
 	//    for k ∈ [0, M).
 	let mut alpha = vec![Goldilocks4::ZERO; m];
 	let mut x_powers = vec![Goldilocks4::ONE; xs.len()];
@@ -108,10 +121,10 @@ pub fn sign(
 		}
 	}
 
-	// 5. Build the Fiat–Shamir transcript with the deterministic prefix
-	//    binding (params, root, msg, ys) into its instance bytes — then run
-	//    WHIR's prover on top.
-	let prefix = prefix_bytes(params, &pk.root, msg, &ys);
+	// 6. Build the Fiat–Shamir transcript with the deterministic prefix
+	//    binding (params, root, w, msg, ys) into its instance bytes — then
+	//    run WHIR's prover on top.
+	let prefix = prefix_bytes(params, &pk.root, &pk.w, msg, &ys);
 	let domain = domain_separator!("jevil-v1")
 		.without_session()
 		.instance(&prefix);
@@ -171,15 +184,6 @@ fn derive_prover_randomness_seed(
 	let mut out = [0u8; 32];
 	out.copy_from_slice(&h);
 	out
-}
-
-/// Horner evaluation of `Σ_k coeffs[k] · x^k`.
-fn horner(coeffs: &[Goldilocks4], x: Goldilocks4) -> Goldilocks4 {
-	let mut acc = Goldilocks4::ZERO;
-	for c in coeffs.iter().rev() {
-		acc = acc * x + *c;
-	}
-	acc
 }
 
 #[cfg(test)]

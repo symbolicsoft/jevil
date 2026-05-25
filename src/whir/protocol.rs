@@ -8,7 +8,8 @@
 //! - Vector commitment: [`MerkleVc`] (Poseidon2-Goldilocks Merkle tree).
 //! - Zero evader: DEEP-FRI [`OodEvader`].
 //! - Fold cap: stop folding when the inner message length reaches the
-//!   `threshold` (Jevil uses 64).
+//!   `threshold` (Jevil uses 64; the `C_zk` evaluation domain is the
+//!   length-512 codeword resulting from `M_ZK = 128` at rate 1/4).
 //!
 //! ## Length-`M` API (paper `def:whir`)
 //!

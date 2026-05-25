@@ -57,7 +57,7 @@ fn serialize_deserialize_pk_sig_round_trip() {
 	let sig = sign(&sk, &pk, &cache, params, b"serde");
 
 	let pk_bytes = pk.to_bytes();
-	let pk2 = PublicKey::from_bytes(&pk_bytes);
+	let pk2 = PublicKey::from_bytes(&pk_bytes).expect("canonical pk round-trips");
 	assert_eq!(pk, pk2);
 
 	let sig_bytes = sig.to_bytes();

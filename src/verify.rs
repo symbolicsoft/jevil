@@ -4,6 +4,7 @@ use spongefish::domain_separator;
 
 use crate::alpha::BatchedAlpha;
 use crate::field::{Goldilocks4, psi};
+use crate::keygen::derive_ood_point;
 use crate::params::Params;
 use crate::positions::derive_positions;
 use crate::sign::Signature;
@@ -41,35 +42,48 @@ pub fn verify(pk: &PublicKey, params: Params, msg: &[u8], sig: &Signature) -> Re
 	// exist with a non-canonical limb (parser enforces it in
 	// `Signature::from_bytes`; `Goldilocks::new` reduces). No re-check here.
 
-	// 1. Re-derive positions, x_t, β_t, and v = Σ β_t · y_t.
+	// 1. Re-derive positions and x_t; re-derive the OOD point z from root
+	//    (identical derivation to KeyGen — the verifier never receives z
+	//    on the wire).
 	let positions = derive_positions(&pk.root, msg, k, params.t());
-	let xs: Vec<Goldilocks4> = positions
+	let mut xs: Vec<Goldilocks4> = positions
 		.iter()
 		.map(|&i| psi(i as u64, params.t() as u64))
 		.collect();
+	let z = derive_ood_point(&pk.root);
+	xs.push(z);
+
+	// 2. Re-derive K+1 betas (β_1..β_K for the message-derived points plus
+	//    β_{K+1} for the OOD term) and compute the batched target
+	//    v = Σ_{t≤K} β_t·y_t + β_{K+1}·w.
 	let betas = derive_betas(&pk.root, msg, &sig.y_values);
-	let v: Goldilocks4 = betas
+	if betas.len() != xs.len() {
+		return Err(Error::VerificationFailed);
+	}
+	let mut v: Goldilocks4 = betas
 		.iter()
 		.zip(sig.y_values.iter())
 		.map(|(b, y)| *b * *y)
 		.sum();
+	v += betas[k] * pk.w;
 
-	// 2. Reconstruct the spongefish transcript using the same instance bytes
+	// 3. Reconstruct the spongefish transcript using the same instance bytes
 	//    the signer used. The opaque whir_proof IS the narg_string in full.
-	let prefix = prefix_bytes(params, &pk.root, msg, &sig.y_values);
+	let prefix = prefix_bytes(params, &pk.root, &pk.w, msg, &sig.y_values);
 	let domain = domain_separator!("jevil-v1")
 		.without_session()
 		.instance(&prefix);
 	let mut transcript = domain.std_verifier(&sig.whir_proof);
 
-	// 3. Build the symbolic length-`M` α handle (O(K · ν) verifier — no
+	// 4. Build the symbolic length-`M` α handle from K+1 (x, β) pairs —
+	//    α = Σ_{t≤K} β_t·u(x_t) + β_{K+1}·u(z). O(K · ν) verifier with no
 	//    length-M alloc; the embedding into WHIR's length-`N` wire format
-	//    happens inside `whir.verify`).
+	//    happens inside `whir.verify`.
 	let alpha = BatchedAlpha::new(&xs, betas, params.nu());
 
-	// 4. Run WHIR's verifier on top.
+	// 5. Run WHIR's verifier on top.
 	let hvzk_budget = params.n() - params.m();
-	let whir = ConcreteWhirVerifier::build(params.m(), hvzk_budget, 32, 64);
+	let whir = ConcreteWhirVerifier::build(params.m(), hvzk_budget, 64, 64);
 	whir.verify(&mut transcript, alpha, v)
 		.map_err(|_| Error::VerificationFailed)?;
 	transcript

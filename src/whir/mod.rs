@@ -23,7 +23,7 @@
 //! - zero evader: DEEP-FRI out-of-domain (`OodEvader`);
 //! - sumcheck: degree-2 inner-product, MSB half-split fold;
 //! - fold cap: stop folding at inner message length `2⁶ = 64`;
-//! - in-domain queries per round: 32 (configurable through
+//! - in-domain queries per round: 64 (configurable through
 //!   [`protocol::ConcreteWhirProtocol::build`]).
 
 pub(crate) mod base_case;
