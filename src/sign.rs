@@ -3,11 +3,10 @@
 use spongefish::domain_separator;
 
 use crate::field::{Goldilocks4, psi};
-use crate::keygen::SignerCache;
+use crate::keygen::{SignerCache, build_whir_protocol};
 use crate::params::Params;
 use crate::positions::derive_positions;
 use crate::transcript::{derive_betas, prefix_bytes};
-use crate::whir::{ConcreteWhirProtocol, LinearForm};
 use crate::{Error, PublicKey, SecretKey};
 
 /// A Jevil signature.
@@ -81,30 +80,24 @@ pub fn sign(
 	let k = Params::K as usize;
 	let t = params.t();
 	let m = params.m();
-	let n = params.n();
 
 	// 1. Positions and their ψ-images.
 	let positions = derive_positions(&pk.root, msg, k, t);
 	let xs: Vec<Goldilocks4> = positions.iter().map(|&i| psi(i as u64, t as u64)).collect();
 
-	// 2. y_t = f(x_t) via Horner over the M coefficients held in the first
-	//    M slots of `cache.m`.
-	let coeffs = &cache.m[..m];
-	let ys: Vec<Goldilocks4> = xs.iter().map(|&x| horner(coeffs, x)).collect();
+	// 2. y_t = f(x_t) via Horner over the M coefficients in `cache.c`.
+	let ys: Vec<Goldilocks4> = xs.iter().map(|&x| horner(&cache.c, x)).collect();
 
 	// 3. β challenges (verifier re-derives the same vector from
 	//    `(root, msg, ys)`).
 	let betas = derive_betas(&pk.root, msg, &ys);
 
-	// 4. The lift `α = Σ_t β_t · u(x_t)` lives in `F^M`; we materialise it
-	//    here, embedded into the WHIR primitive's length-`N` wire format
-	//    (zero-padded over the WHIR encoding-randomness slots — see
-	//    `lift.rs` module docs for the embedding). Computed via a parallel
-	//    Horner pass over the K positions to avoid the K transient
-	//    length-N allocations the old MonomialLift path used.
-	let mut alpha = vec![Goldilocks4::ZERO; n];
+	// 4. Materialise the length-`M` lift `α = Σ_t β_t · u(x_t)` via a
+	//    parallel Horner pass over the K positions. α[k] = Σ_t β_t · x_t^k
+	//    for k ∈ [0, M).
+	let mut alpha = vec![Goldilocks4::ZERO; m];
 	let mut x_powers = vec![Goldilocks4::ONE; xs.len()];
-	for slot in alpha.iter_mut().take(m) {
+	for slot in alpha.iter_mut() {
 		let mut sum = Goldilocks4::ZERO;
 		for t in 0..xs.len() {
 			sum += betas[t] * x_powers[t];
@@ -114,7 +107,6 @@ pub fn sign(
 			x_powers[t] *= xs[t];
 		}
 	}
-	// alpha[m..n] stays zero by initialisation (WHIR-pad region).
 
 	// 5. Build the Fiat–Shamir transcript with the deterministic prefix
 	//    binding (params, root, msg, ys) into its instance bytes — then run
@@ -134,13 +126,8 @@ pub fn sign(
 	// Lemma 9.3).
 	let mask_seed = derive_prover_randomness_seed(sk, &pk.root, msg, &ys);
 
-	let whir = ConcreteWhirProtocol::build(n, 32, 64);
-	whir.prove_to_transcript(
-		&mut transcript,
-		cache.m.clone(),
-		LinearForm::new(alpha),
-		&mask_seed,
-	);
+	let whir = build_whir_protocol(params);
+	whir.prove(&mut transcript, &cache.whir_state, alpha, &mask_seed);
 
 	Signature {
 		y_values: ys,

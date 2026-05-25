@@ -99,16 +99,6 @@ pub(crate) struct LinearConstraint<LFH: LinearFormHandle> {
 	pub(crate) value: LFH::Alphabet,
 }
 
-impl<LFH: LinearFormHandle> LinearConstraint<LFH> {
-	/// Pair a linear-form handle with its claimed inner-product value.
-	pub(crate) fn new(linear_form_handle: LFH, value: LFH::Alphabet) -> Self {
-		Self {
-			linear_form_handle,
-			value,
-		}
-	}
-}
-
 /// A handle wrapping another handle that has already had some prefix of fold
 /// challenges applied, optionally also scaling the output by a constant
 /// factor. The scaling is used by the HVZK sumcheck (Construction 6.3) to

@@ -8,7 +8,7 @@ use crate::params::Params;
 use crate::positions::derive_positions;
 use crate::sign::Signature;
 use crate::transcript::{derive_betas, prefix_bytes};
-use crate::whir::{ConcreteWhirVerifier, LinearConstraint};
+use crate::whir::ConcreteWhirVerifier;
 use crate::{Error, PublicKey};
 
 /// Verify a Jevil signature. Realizes `Jevil.Verify` of the paper
@@ -62,13 +62,15 @@ pub fn verify(pk: &PublicKey, params: Params, msg: &[u8], sig: &Signature) -> Re
 		.instance(&prefix);
 	let mut transcript = domain.std_verifier(&sig.whir_proof);
 
-	// 3. Build the symbolic α handle (O(K · ν') verifier — no length-N alloc).
-	let alpha = BatchedAlpha::new(&xs, betas, params.nu(), params.nu_prime());
-	let constraint = LinearConstraint::new(alpha, v);
+	// 3. Build the symbolic length-`M` α handle (O(K · ν) verifier — no
+	//    length-M alloc; the embedding into WHIR's length-`N` wire format
+	//    happens inside `whir.verify`).
+	let alpha = BatchedAlpha::new(&xs, betas, params.nu());
 
 	// 4. Run WHIR's verifier on top.
-	let whir = ConcreteWhirVerifier::build(params.n(), 32, 64);
-	whir.verify_from_transcript(&mut transcript, constraint)
+	let hvzk_budget = params.n() - params.m();
+	let whir = ConcreteWhirVerifier::build(params.m(), hvzk_budget, 32, 64);
+	whir.verify(&mut transcript, alpha, v)
 		.map_err(|_| Error::VerificationFailed)?;
 	transcript
 		.check_eof()

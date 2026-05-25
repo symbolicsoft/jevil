@@ -9,8 +9,11 @@
 //! 3. *verify* that opening against a public commitment root (run during
 //!    [`crate::verify`]).
 //!
-//! See the paper §2.3 for the full WHIR API contract. The implementation here
-//! is hard-specialised to the Jevil setting:
+//! See the paper §2.3 (`def:whir`) for the full WHIR API contract. The
+//! API exposed here matches it byte-for-byte: callers pass length-`M`
+//! vectors and a 32-byte seed; the Prop. 3.19 encoding randomness lives
+//! entirely inside this module and never appears at the boundary. The
+//! implementation is hard-specialised to the Jevil setting:
 //!
 //! - field: [`crate::field::Goldilocks4`];
 //! - inner code: rate-1/4 [`code::ReedSolomon`] wrapped in
@@ -36,5 +39,5 @@ pub(crate) mod sumcheck;
 pub(crate) mod transcript_io;
 pub(crate) mod vc;
 
-pub(crate) use linear_form::{LinearConstraint, LinearForm, LinearFormHandle};
-pub(crate) use protocol::{ConcreteWhirProtocol, ConcreteWhirVerifier};
+pub(crate) use linear_form::LinearFormHandle;
+pub(crate) use protocol::{ConcreteWhirProtocol, ConcreteWhirVerifier, WhirSignerState};
