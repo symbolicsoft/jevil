@@ -6,11 +6,15 @@
 //! **global constant** (16), not a per-deployment choice — see the
 //! [`Params::K`] doc comment for the rationale.
 
-/// Configuration for a Jevil signer/verifier.
+/// Configuration for a Jevil signer/verifier. Realizes the parameter
+/// recipe of paper §2.3.
 ///
 /// The only field is the signing budget [`Params::n_star`]. All derived
-/// quantities (`M`, `T`, `ν`, `n_cliff`) are computed on demand by methods on
-/// `Params` from `n_star` and the global constant `K`.
+/// quantities (`M`, `T`, `ν`, `n_cliff`, the commit dimension `N`) are
+/// computed on demand by methods on `Params` from `n_star` and the global
+/// constant `K`. The commit dimension `N = nextpow2(M + n*·Q_max)` is the
+/// Prop. 3.19 ZK encoding randomness sizing that supports multi-opening
+/// HVZK across the full signing budget (paper Lemma 11).
 ///
 /// **`n_star + 1` must be a power of two** — i.e. `n_star` must lie in the
 /// recommended set `{1, 3, 7, 15, 31, 63, 127, 255, 511, 1023, …}`. Within

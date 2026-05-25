@@ -209,8 +209,15 @@ fn rand_field<R: rand::RngCore + rand::CryptoRng>(rng: &mut R) -> Goldilocks4 {
 }
 
 // ---------------------------------------------------------------------------
-// Prover-side: OodEvader  (TODO: remove once Construction 9.7 is wired into
-// codeswitch.rs at Task 10; PrivateZeroEvader becomes the only OOD path.)
+// Prover-side: OodEvader
+//
+// Note on Construction 9.7: the codeswitch round in `protocol.rs` uses both
+// [`OodEvader`] (for the `ze(ρ_i)` part of the OOD answer and the `ze_constraint`
+// added to the main linear form) and the per-round padding mask oracle (for
+// the `r'[i]` privacy padding). The two together realize the Lemma 9.3
+// guarantee. [`PrivateZeroEvader`] is retained as a self-contained helper
+// for callers that want the combined operation in one struct (e.g., a future
+// simulator), but Jevil's protocol composes the two primitives directly.
 // ---------------------------------------------------------------------------
 
 /// DEEP-FRI out-of-domain evader. Each call issues `η` linear-form constraints

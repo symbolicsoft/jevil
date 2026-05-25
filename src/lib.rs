@@ -129,14 +129,18 @@ pub use crate::params::Params;
 pub use crate::sign::{Signature, sign};
 pub use crate::verify::verify;
 
-/// A Jevil public key.
+/// A Jevil public key. Realizes the `pk = (root, n*)` of paper §3.3,
+/// Construction 4 (`KeyGen`).
 ///
-/// Layout: 32-byte WHIR commitment root concatenated with a 4-byte little-endian
-/// `n_star`. The signing budget is carried in the public key so that verifiers
-/// can derive every subsidiary parameter (`M`, `T`, `ν`) from it.
+/// Layout: 32-byte zk-WHIR commitment root concatenated with a 4-byte
+/// little-endian `n_star`. The signing budget is carried in the public key
+/// so that verifiers can derive every subsidiary parameter (`M`, `T`, `ν`,
+/// the commit dimension `N`) from it.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PublicKey {
-	/// 32-byte WHIR commitment to the coefficient vector `c`.
+	/// 32-byte zk-WHIR commitment root over `m = (c, r_zk) ∈ F^N`. Bound by
+	/// the cap-binding theorem (paper Theorem 11): every accepting opening
+	/// against this root reveals an evaluation of a degree-≤`D` polynomial.
 	pub root: [u8; 32],
 	/// Signing budget `n*` chosen at [`keygen`].
 	pub n_star: u32,
@@ -165,7 +169,13 @@ impl PublicKey {
 }
 
 /// A Jevil signing secret: a 32-byte seed from which every other signer-side
-/// value is deterministically derived.
+/// value is deterministically derived (paper §3.3, Construction 4 step 1:
+/// `s ← {0,1}^256`).
+///
+/// The seed expands into the polynomial coefficients `c = (c_0, …, c_{M−1})`
+/// via the `JV-SEED` SHAKE256 stream and into the Prop. 3.19 encoding
+/// randomness `r_zk` (of length `N − M`) via the `JV-RZK` stream. Together
+/// they form the ZK-encoded commitment vector `m = (c, r_zk) ∈ F^N`.
 ///
 /// `SecretKey` deliberately does **not** implement [`std::fmt::Debug`] or
 /// [`std::fmt::Display`] to discourage accidental logging. The inner bytes are
