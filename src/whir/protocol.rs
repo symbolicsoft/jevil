@@ -35,13 +35,13 @@ use super::commitment::{
 use super::linear_form::{
 	FoldedFormHandle, LinearCombinationForm, LinearConstraint, LinearForm, LinearFormHandle,
 };
-use super::sumcheck::{prove_sumcheck, verify_sumcheck};
 use super::transcript_io::{
 	read_opening, sample_positions_prover, sample_positions_verifier, write_opening,
 };
-use super::trivial::{TrivialZk, verify_trivial_zk};
+use super::base_case::{BaseCase, verify_base_case};
+use super::mask_stack::MaskStack;
 use super::vc::MerkleVc;
-use super::zero_evader::{ETA, OodEvader, OodEvaderHandle};
+use super::evader::{ETA, OodEvader, OodEvaderHandle};
 use crate::field::Goldilocks4;
 
 // ---------------------------------------------------------------------------
@@ -78,14 +78,19 @@ pub(crate) struct ProverCodeswitch {
 }
 
 impl ProverCodeswitch {
-	/// Drive one codeswitch round. Writes its commitment, OOD answers, opening
-	/// data, sumcheck transcripts inline into the prover transcript stream.
+	/// Drive one codeswitch round + embedded HVZK sumcheck.
+	///
+	/// The `mask_seed`, `salt`, and `mask_stack` let `prove_sumcheck_zk`
+	/// commit fresh sumcheck masks and push them onto the stack with
+	/// their `(α, sl, target)`.
 	fn prove(
 		&self,
 		transcript: &mut ProverState,
 		input: ProverFolded,
 		mut constraint: LinearForm<Goldilocks4>,
-		sumcheck_masks: &[Goldilocks4],
+		mask_seed: &[u8; 32],
+		salt: &[u8],
+		mask_stack: &mut super::mask_stack::MaskStack,
 	) -> (LinearForm<Goldilocks4>, ProverFolded) {
 		let output = self
 			.output_commitment
@@ -128,8 +133,21 @@ impl ProverCodeswitch {
 		}
 		constraint += LinearForm::new(input.code().apply_transpose(&selector));
 
-		let (folded_state, folded_constraint) =
-			prove_sumcheck(transcript, output, constraint, sumcheck_masks);
+		// HVZK sumcheck. Carry-in handling: the prover's running sum for the
+		// sumcheck is ⟨a, b⟩, which equals the verifier's claim MINUS the
+		// carry-in mask contribution mask_carry_in_pre. The verifier
+		// subtracts mask_carry_in_pre from its claim before its own HVZK
+		// init step; both sides then run prove_sumcheck / verify_sumcheck
+		// in sync. After the sumcheck, the verifier adds back ε · carry-in
+		// to restore the joint claim. The prover doesn't track claim
+		// explicitly; downstream IORs read coefficients/mask_stack.
+		let (folded_state, folded_constraint, mask_handles, gammas, epsilon, mask_targets) =
+			super::sumcheck::prove_sumcheck_zk(
+				transcript, output, constraint, mask_seed, salt,
+			);
+		mask_stack.scale_alphas(epsilon);
+		mask_stack.push_sumcheck_masks(mask_handles, gammas, mask_targets);
+		let folded_constraint = folded_constraint * epsilon;
 		(folded_constraint, folded_state)
 	}
 }
@@ -139,7 +157,7 @@ impl ProverCodeswitch {
 pub(crate) struct ConcreteWhirProtocol {
 	initial_commitment: ProverCommit,
 	rounds: Vec<ProverCodeswitch>,
-	final_trivial: TrivialZk,
+	final_base_case: BaseCase,
 }
 
 impl ConcreteWhirProtocol {
@@ -167,7 +185,7 @@ impl ConcreteWhirProtocol {
 		Self {
 			initial_commitment,
 			rounds,
-			final_trivial: TrivialZk { queries },
+			final_base_case: BaseCase::new(queries, crate::params::Params::T_ZK),
 		}
 	}
 
@@ -183,74 +201,53 @@ impl ConcreteWhirProtocol {
 		initial_constraint: LinearForm<Goldilocks4>,
 		mask_seed: &[u8; 32],
 	) {
-		// TODO: HVZK sumcheck (Construction 6.3) is wired through but
-		// currently passes empty masks for both initial and per-codeswitch
-		// sumcheck calls — the masked round-polynomial construction has a
-		// math bug that needs debugging. Leaving the parameter threaded so
-		// the wire is in place; the non-HVZK sumcheck path is byte-identical
-		// to the pre-HVZK behavior.
-		let no_masks: &[Goldilocks4] = &[];
-
+		// HVZK Stage A: each sumcheck commits k mask oracles, runs the
+		// HVZK round-poly math, and pushes k masks onto a per-signature
+		// mask_stack. The base case consumes the full stack via the joint
+		// Construction 7.2 target check. The codeswitch keeps plain OOD
+		// (Construction 9.7's padding mask is Stage B).
 		let initial_state = self.initial_commitment.commit(transcript, msg);
-		let (mut folded_state, mut constraint) =
-			prove_sumcheck(transcript, initial_state, initial_constraint, no_masks);
+		let mut mask_stack = MaskStack::new();
 
-		for round in &self.rounds {
-			let (next_constraint, next_folded) =
-				round.prove(transcript, folded_state, constraint, no_masks);
+		let (mut folded_state, mut constraint, mask_handles, gammas, epsilon, mask_targets) =
+			super::sumcheck::prove_sumcheck_zk(
+				transcript,
+				initial_state,
+				initial_constraint,
+				mask_seed,
+				b"sumcheck::initial",
+			);
+		// scale_alphas is a no-op on the empty stack (no carry-in masks).
+		mask_stack.scale_alphas(epsilon);
+		mask_stack.push_sumcheck_masks(mask_handles, gammas, mask_targets);
+		constraint = constraint * epsilon;
+
+		for (round_idx, round) in self.rounds.iter().enumerate() {
+			let salt = format!("sumcheck::post-codeswitch-{round_idx}");
+			let (next_constraint, next_folded) = round.prove(
+				transcript,
+				folded_state,
+				constraint,
+				mask_seed,
+				salt.as_bytes(),
+				&mut mask_stack,
+			);
 			folded_state = next_folded;
 			constraint = next_constraint;
 		}
 
-		// HVZK base case (Construction 7.2): commit mask, send mask_sum,
-		// receive γ, send f* = g + γ·f, open both codewords at random
-		// positions.
+		// HVZK base case (Construction 7.2). The mask stack contains every
+		// sumcheck mask pushed across all sumchecks; the BaseCase consumes
+		// them via the joint target check + per-mask local check + codeword
+		// consistency.
 		let coefficients: Vec<Goldilocks4> = constraint.coefficients().to_vec();
-		let mask_state = self.final_trivial.commit_mask(
+		self.final_base_case.prove(
 			transcript,
-			folded_state.msg().len(),
+			folded_state,
 			&coefficients,
+			&mask_stack,
 			mask_seed,
 		);
-		self.final_trivial
-			.finish(transcript, folded_state, mask_state);
-	}
-}
-
-/// Derive `count` HVZK sumcheck mask field elements deterministically from
-/// the per-signature `mask_seed` via the `JV-RZK` SHAKE256 stream, with a
-/// distinct sub-domain tag so this stream is independent of the base case's
-/// `g_msg` stream.
-fn derive_sumcheck_masks(mask_seed: &[u8; 32], count: usize) -> Vec<Goldilocks4> {
-	use crate::hash::{Family, JV_RZK, hash};
-	let mut buffer_size = count * 32 * 2 + 32;
-	let mut refill = 0u64;
-	loop {
-		let extra = refill.to_le_bytes();
-		let stream = if refill == 0 {
-			hash(Family::Xof, JV_RZK, &[mask_seed, b"sumcheck"], buffer_size)
-		} else {
-			hash(
-				Family::Xof,
-				JV_RZK,
-				&[mask_seed, b"sumcheck", &extra],
-				buffer_size,
-			)
-		};
-		let mut out = Vec::with_capacity(count);
-		let mut cursor = 0usize;
-		while out.len() < count && cursor + 32 <= stream.len() {
-			let chunk = &stream[cursor..cursor + 32];
-			cursor += 32;
-			if let Some(g) = Goldilocks4::from_bytes(chunk) {
-				out.push(g);
-			}
-		}
-		if out.len() == count {
-			return out;
-		}
-		buffer_size *= 2;
-		refill += 1;
 	}
 }
 
@@ -266,13 +263,16 @@ pub(crate) struct VerifierCodeswitch {
 }
 
 impl VerifierCodeswitch {
-	/// Verify one codeswitch round. Reads the prover-written messages in
-	/// exactly the order [`ProverCodeswitch::prove`] wrote them.
+	/// Verify one codeswitch round + embedded HVZK sumcheck. Subtracts the
+	/// carry-in mask contribution from constraint.value before calling
+	/// verify_sumcheck (so the sumcheck's HVZK init scales just the main
+	/// part by ε), then adds back ε · carry_in to restore the joint claim.
 	fn verify(
 		&self,
 		transcript: &mut VerifierState,
 		input: &VerifierFolded,
 		constraint: LinearConstraint<FoldedFormHandle<Goldilocks4>>,
+		mask_stack: &mut super::mask_stack::MaskStack,
 	) -> VerificationResult<(
 		LinearConstraint<FoldedFormHandle<Goldilocks4>>,
 		VerifierFolded,
@@ -324,16 +324,30 @@ impl VerifierCodeswitch {
 			coeffs.push(batch_rand[ood_len + i]);
 		}
 
+		// Wrap in FoldedFormHandle so the type matches what verify_sumcheck_zk
+		// expects (its scale field defaults to ONE here — no additional
+		// scaling beyond the LinearCombinationForm batching).
+		let mask_carry_in_pre = mask_stack.joint_mask_value();
 		let batched_constraint = LinearConstraint {
-			linear_form_handle: LinearCombinationForm {
-				linear_form_handles: forms,
-				combination_rand: coeffs,
+			linear_form_handle: FoldedFormHandle {
+				linear_form_handle: Box::new(LinearCombinationForm {
+					linear_form_handles: forms,
+					combination_rand: coeffs,
+				}),
+				rand: Vec::new(),
+				scale: <Goldilocks4 as effsc::field::SumcheckField>::ONE,
 			},
-			value,
+			value: value - mask_carry_in_pre,
 		};
 
-		let (folded_output, folded_constraint) =
-			verify_sumcheck(transcript, output, batched_constraint, false)?;
+		// HVZK sumcheck (Construction 6.3).
+		let (folded_output, mut folded_constraint, mask_handles, gammas, epsilon, mask_targets) =
+			super::sumcheck::verify_sumcheck_zk(transcript, output, batched_constraint)?;
+		// Restore joint claim: add back ε · carry_in_pre. The mask stack
+		// alphas then scale by ε so Σ α_i · μ_i (post-scale) = ε · carry_in_pre.
+		folded_constraint.value += epsilon * mask_carry_in_pre;
+		mask_stack.scale_alphas(epsilon);
+		mask_stack.push_sumcheck_masks(mask_handles, gammas, mask_targets);
 		Ok((folded_constraint, folded_output))
 	}
 }
@@ -343,7 +357,7 @@ impl VerifierCodeswitch {
 pub(crate) struct ConcreteWhirVerifier {
 	initial_commitment: VerifierExplicit,
 	rounds: Vec<VerifierCodeswitch>,
-	final_trivial: TrivialZk,
+	final_base_case: BaseCase,
 }
 
 impl ConcreteWhirVerifier {
@@ -368,7 +382,7 @@ impl ConcreteWhirVerifier {
 		Self {
 			initial_commitment,
 			rounds,
-			final_trivial: TrivialZk { queries },
+			final_base_case: BaseCase::new(queries, crate::params::Params::T_ZK),
 		}
 	}
 
@@ -387,22 +401,40 @@ impl ConcreteWhirVerifier {
 			commitment: transcript.prover_message()?,
 		};
 
-		let (mut folded_commitment, mut constraint) =
-			verify_sumcheck(transcript, initial_commitment, initial_constraint, false)?;
+		// Wrap the user-provided initial constraint in a FoldedFormHandle (with
+		// scale=ONE and empty rand) so verify_sumcheck_zk's input type matches.
+		// Initial mask stack is empty → mask_carry_in_pre = 0 → no subtraction.
+		let wrapped_initial = LinearConstraint {
+			linear_form_handle: FoldedFormHandle {
+				linear_form_handle: Box::new(initial_constraint.linear_form_handle),
+				rand: Vec::new(),
+				scale: <Goldilocks4 as effsc::field::SumcheckField>::ONE,
+			},
+			value: initial_constraint.value,
+		};
+
+		let mut mask_stack = super::mask_stack::MaskStack::new();
+		let (mut folded_commitment, mut constraint, mask_handles, gammas, epsilon, mask_targets) =
+			super::sumcheck::verify_sumcheck_zk(transcript, initial_commitment, wrapped_initial)?;
+		mask_stack.scale_alphas(epsilon); // no-op (empty)
+		mask_stack.push_sumcheck_masks(mask_handles, gammas, mask_targets);
 
 		for round in &self.rounds {
 			let (next_constraint, next_folded) =
-				round.verify(transcript, &folded_commitment, constraint)?;
+				round.verify(transcript, &folded_commitment, constraint, &mut mask_stack)?;
 			constraint = next_constraint;
 			folded_commitment = next_folded;
 		}
 
-		// HVZK base case verifier (Construction 7.2 of eprint 2026/391).
-		verify_trivial_zk(
+		// HVZK base case (Construction 7.2 with non-empty mask stack).
+		verify_base_case(
 			transcript,
-			self.final_trivial.queries,
+			self.final_base_case.queries,
+			self.final_base_case.mask_queries,
 			folded_commitment,
 			constraint,
+			&mask_stack.oracles,
+			&mask_stack.constraints,
 		)
 	}
 }

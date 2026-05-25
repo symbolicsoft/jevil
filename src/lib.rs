@@ -72,15 +72,19 @@
 //!
 //! The secret is a univariate polynomial `f ∈ F[X]` of degree `D = M − 1` over
 //! the quartic Goldilocks extension `F_{q_0^4}` (`|F| ≈ 2^256`), derived
-//! deterministically from a 32-byte seed `σ`. The public key is a WHIR
-//! commitment to the length-`M` coefficient vector `c = (c_0, …, c_{M−1})`.
-//! A signature on a message `M` opens `f` at `K = 16` message-derived
-//! positions via a single batched WHIR linear-form proof. After
+//! deterministically from a 32-byte seed `σ`. The public key is a zk-WHIR
+//! commitment to the length-`N` ZK-encoded coefficient vector `m = (c, r_zk)`
+//! where `c = (c_0, …, c_{M−1})` and `r_zk` is the Proposition 3.19 encoding
+//! randomness. A signature on a message `M` opens `f` at `K = 16`
+//! message-derived positions via a single batched zk-WHIR linear-form proof
+//! (Construction 6.3 sumcheck + Construction 7.2 base case). After
 //! `n_cliff = ⌈M/K⌉` signatures the outsider has accumulated ≥ `D + 1`
 //! distinct evaluations of `f` and reconstructs the secret by Lagrange
 //! interpolation.
 //!
-//! For the full construction and security analysis see the Jevil paper.
+//! For the full construction and security analysis see the Jevil paper. For
+//! the per-construction compliance status against the zk-WHIR paper (ePrint
+//! 2026/391), see `docs/zkwhir-spec-compliance.md`.
 //!
 //! ## Modules
 //!

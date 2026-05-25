@@ -116,7 +116,8 @@ fn lagrange_interpolate(pairs: &[(Goldilocks4, Goldilocks4)]) -> Vec<Goldilocks4
 	coeffs
 }
 
-const JV_POSN: [u8; 8] = *b"JV-POSN\0";
+// Paper §2.2: 8-byte ASCII strings right-padded with 0x20 (space).
+const JV_POSN: [u8; 8] = *b"JV-POSN ";
 
 fn shake256_tagged(tag: [u8; 8], inputs: &[&[u8]], out_len: usize) -> Vec<u8> {
 	let mut hasher = Shake256::default();

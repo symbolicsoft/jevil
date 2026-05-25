@@ -59,7 +59,8 @@ impl Signature {
 	}
 }
 
-/// Produce a Jevil signature on `msg` under `(pk, sk)`.
+/// Produce a Jevil signature on `msg` under `(pk, sk)`. Realizes
+/// `Jevil.Sign` of the paper (`§3.3, Construction 5`).
 ///
 /// `cache` must be the [`SignerCache`] returned by [`crate::keygen`] (or
 /// rebuilt via [`SignerCache::from_secret`]) for this `sk`; passing a cache

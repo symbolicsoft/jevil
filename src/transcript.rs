@@ -7,7 +7,7 @@
 //! incompatibility.
 
 use crate::field::Goldilocks4;
-use crate::hash::{Family, JV_FSCH, hash};
+use crate::hash::{Family, JV_FSCH, JV_OPEN, hash};
 use crate::params::Params;
 
 /// Construct the deterministic prefix bytes injected into the spongefish
@@ -16,7 +16,7 @@ use crate::params::Params;
 /// Layout (paper §4.2 step 4 / §4.3 step 3):
 ///
 /// ```text
-/// "JV-OPEN\0"               (8 bytes)
+/// "JV-OPEN "                (8 bytes, paper §2.2 space-padded tag)
 /// params.canonical_bytes()  (4 bytes — n_star LE; K is the global constant)
 /// root                      (32 bytes)
 /// (msg.len() as u64).to_le_bytes()  (8 bytes)
@@ -30,7 +30,7 @@ pub(crate) fn prefix_bytes(
 	ys: &[Goldilocks4],
 ) -> Vec<u8> {
 	let mut buf = Vec::with_capacity(8 + 4 + 32 + 8 + msg.len() + ys.len() * 32);
-	buf.extend_from_slice(b"JV-OPEN\0");
+	buf.extend_from_slice(&JV_OPEN);
 	buf.extend_from_slice(&params.canonical_bytes());
 	buf.extend_from_slice(root);
 	buf.extend_from_slice(&(msg.len() as u64).to_le_bytes());
@@ -144,7 +144,7 @@ mod tests {
 		let p = prefix_bytes(params, &root, msg, &ys);
 		// 8 + 4 + 32 + 8 + 2 + 2·32 = 118
 		assert_eq!(p.len(), 118);
-		assert_eq!(&p[..8], b"JV-OPEN\0");
+		assert_eq!(&p[..8], b"JV-OPEN ");
 		assert_eq!(&p[8..12], &params.canonical_bytes());
 		assert_eq!(&p[12..44], &root);
 		assert_eq!(&p[44..52], &(2u64).to_le_bytes());

@@ -23,16 +23,18 @@
 //! - in-domain queries per round: 32 (configurable through
 //!   [`protocol::ConcreteWhirProtocol::build`]).
 
+pub(crate) mod base_case;
 pub(crate) mod code;
 pub(crate) mod codeswitch;
 pub(crate) mod commitment;
+pub(crate) mod encoding;
+pub(crate) mod evader;
 pub(crate) mod linear_form;
+pub(crate) mod mask_stack;
 pub(crate) mod protocol;
 pub(crate) mod sumcheck;
 pub(crate) mod transcript_io;
-pub(crate) mod trivial;
 pub(crate) mod vc;
-pub(crate) mod zero_evader;
 
 pub(crate) use linear_form::{LinearConstraint, LinearForm, LinearFormHandle};
 pub(crate) use protocol::{ConcreteWhirProtocol, ConcreteWhirVerifier};

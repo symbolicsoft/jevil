@@ -118,6 +118,13 @@ The cliff is *intrinsic to the public key*. An adversarial signer cannot
 extend it by committing to a non-codeword or by reusing proofs across
 roots — see the paper for the precise cap-binding lemma.
 
+The WHIR commitment is instantiated as **zk-WHIR** (honest-verifier
+zero-knowledge WHIR): per-signature transcripts are perfectly simulable
+from `(pk, msg, (y_t))` alone. Below the cliff, no observer holding any
+number of signatures learns anything about `f` beyond the `K` explicitly
+opened `y_t` values per signature. See [`docs/zkwhir-spec-compliance.md`](docs/zkwhir-spec-compliance.md)
+for the per-construction status against the [zk-WHIR paper][zkwhir].
+
 ## Parameter selection
 
 Jevil takes a single deployment-time integer `n_star`, which must satisfy
@@ -261,3 +268,4 @@ Licensed under either of [Apache License, Version 2.0](LICENSE-APACHE) or
 [MIT license](LICENSE-MIT) at your option.
 
 [whir]: https://eprint.iacr.org/2024/1586
+[zkwhir]: https://eprint.iacr.org/2026/391

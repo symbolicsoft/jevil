@@ -134,10 +134,18 @@ impl<F: Field> LinearFormHandle for ExplicitLinearForm<F> {
 }
 
 /// A handle wrapping another handle that has already had some prefix of fold
-/// challenges applied.
+/// challenges applied, optionally also scaling the output by a constant
+/// factor. The scaling is used by the HVZK sumcheck (Construction 6.3) to
+/// bake `mask_rlc = ε` into the output linear form: after a `k`-round HVZK
+/// sumcheck, the new main linear form is `ε · Fold(main_lf, γ)` rather than
+/// just `Fold(main_lf, γ)`.
 pub(crate) struct FoldedFormHandle<F> {
 	pub(crate) linear_form_handle: Box<dyn LinearFormHandle<Alphabet = F>>,
 	pub(crate) rand: Vec<F>,
+	/// Multiplicative scaling applied to `folded_form`'s output. `F::ONE`
+	/// when there is no scaling (non-HVZK sumcheck) or when the handle was
+	/// constructed before HVZK landed.
+	pub(crate) scale: F,
 }
 
 impl<F: Field> LinearFormHandle for FoldedFormHandle<F> {
@@ -151,7 +159,13 @@ impl<F: Field> LinearFormHandle for FoldedFormHandle<F> {
 		let mut combined = Vec::with_capacity(self.rand.len() + rand.len());
 		combined.extend_from_slice(&self.rand);
 		combined.extend_from_slice(rand);
-		self.linear_form_handle.folded_form(&combined)
+		let mut out = self.linear_form_handle.folded_form(&combined);
+		if self.scale != F::ONE {
+			for x in out.iter_mut() {
+				*x *= self.scale;
+			}
+		}
+		out
 	}
 }
 

@@ -200,14 +200,6 @@ pub(crate) trait CodeCommitmentHandle {
 		self.code().codeword_len()
 	}
 
-	/// Re-encode `msg` under the same code (used by the final trivial step).
-	fn encode(
-		&self,
-		msg: &[<Self::Code as AdditiveCode>::InputAlphabet],
-	) -> Vec<<Self::Code as AdditiveCode>::OutputAlphabet> {
-		self.code().encode(msg)
-	}
-
 	/// Verify the supplied opening at the given positions and return the
 	/// opened codeword symbols.
 	fn verify_openings(

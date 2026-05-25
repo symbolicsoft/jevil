@@ -43,6 +43,7 @@ impl SignerCache {
 }
 
 /// Generate a fresh `(PublicKey, SecretKey, SignerCache)` triple from a CSPRNG.
+/// Realizes `Jevil.KeyGen` of the paper (`§3.3, Construction 4`).
 ///
 /// `rng` is consumed only to draw a 32-byte uniform `σ`; both `c` (from
 /// `JV-SEED`) and `r_zk` (from `JV-RZK`) are derived deterministically from

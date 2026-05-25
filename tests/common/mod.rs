@@ -9,8 +9,9 @@
 use jevil::Goldilocks4;
 use shake::{ExtendableOutput, Shake256, Update, XofReader};
 
-pub const JV_SEED: [u8; 8] = *b"JV-SEED\0";
-pub const JV_POSN: [u8; 8] = *b"JV-POSN\0";
+// Paper §2.2: 8-byte ASCII strings right-padded with 0x20 (space).
+pub const JV_SEED: [u8; 8] = *b"JV-SEED ";
+pub const JV_POSN: [u8; 8] = *b"JV-POSN ";
 
 /// SHAKE256 of `tag ‖ len_8(x_1) ‖ x_1 ‖ … ‖ len_8(x_k) ‖ x_k`, squeezed to
 /// `out_len` bytes — Jevil's domain-tagged length-prefixed hash framing.

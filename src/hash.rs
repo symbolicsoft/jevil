@@ -37,18 +37,23 @@ use shake::{ExtendableOutput, Shake256, Update, XofReader};
 // ---------------------------------------------------------------------------
 
 /// Domain tag for the seed-derived polynomial coefficients (XOF).
-pub(crate) const JV_SEED: [u8; 8] = *b"JV-SEED\0";
+pub(crate) const JV_SEED: [u8; 8] = *b"JV-SEED ";
 /// Domain tag for the seed-derived ZK encoding randomness (Prop. 3.19 of
 /// eprint 2026/391). Used to extend the committed message from `M` to `N`
 /// before NTT encoding so that any subset of ≤ `N − M` codeword positions
 /// reveals nothing about the honest coefficients.
-pub(crate) const JV_RZK: [u8; 8] = *b"JV-RZK_\0";
+pub(crate) const JV_RZK: [u8; 8] = *b"JV-RZK  ";
 /// Domain tag for per-message position derivation (XOF).
-pub(crate) const JV_POSN: [u8; 8] = *b"JV-POSN\0";
+pub(crate) const JV_POSN: [u8; 8] = *b"JV-POSN ";
 /// Domain tag for the Fiat–Shamir batching challenges (XOF).
-pub(crate) const JV_FSCH: [u8; 8] = *b"JV-FSCH\0";
+pub(crate) const JV_FSCH: [u8; 8] = *b"JV-FSCH ";
 /// Domain tag for WHIR's internal vector commitment (Poseidon2).
-pub(crate) const JV_WHIR: [u8; 8] = *b"JV-WHIR\0";
+pub(crate) const JV_WHIR: [u8; 8] = *b"JV-WHIR ";
+/// Domain tag for the WHIR transcript's instance-bytes prefix
+/// ([`crate::transcript::prefix_bytes`]). Not used as input to a hash
+/// invocation — consumed only by the Fiat–Shamir layer as the leading
+/// 8 bytes of the binding prefix per paper §4.2 step 4 / §4.3 step 3.
+pub(crate) const JV_OPEN: [u8; 8] = *b"JV-OPEN ";
 
 // ---------------------------------------------------------------------------
 // Hash family selector
@@ -220,10 +225,19 @@ mod tests {
 
 	#[test]
 	fn spec_tags_are_present() {
-		assert_eq!(&JV_SEED, b"JV-SEED\0");
-		assert_eq!(&JV_RZK, b"JV-RZK_\0");
-		assert_eq!(&JV_POSN, b"JV-POSN\0");
-		assert_eq!(&JV_FSCH, b"JV-FSCH\0");
-		assert_eq!(&JV_WHIR, b"JV-WHIR\0");
+		// Per paper §2.2: 8-byte ASCII strings right-padded with 0x20 (space).
+		assert_eq!(&JV_SEED, b"JV-SEED ");
+		assert_eq!(&JV_RZK, b"JV-RZK  ");
+		assert_eq!(&JV_POSN, b"JV-POSN ");
+		assert_eq!(&JV_FSCH, b"JV-FSCH ");
+		assert_eq!(&JV_WHIR, b"JV-WHIR ");
+		assert_eq!(&JV_OPEN, b"JV-OPEN ");
+		// Pairwise distinct as 8-byte strings.
+		let tags: [&[u8; 8]; 6] = [&JV_SEED, &JV_RZK, &JV_POSN, &JV_FSCH, &JV_WHIR, &JV_OPEN];
+		for i in 0..tags.len() {
+			for j in (i + 1)..tags.len() {
+				assert_ne!(tags[i], tags[j]);
+			}
+		}
 	}
 }

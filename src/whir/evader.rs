@@ -45,14 +45,39 @@ pub(crate) const ETA: usize = 2;
 /// the prover supplies `r`. With `M` chosen so its columns span `F^ETA`,
 /// the joint distribution of `(ρ, y)` is statistically independent of `m`
 /// over random `r` — that's the privacy property.
-pub(crate) struct PrivateOodEvader {
+pub(crate) struct PrivateZeroEvader {
 	pub(crate) k: usize,
 	pub(crate) r_len: usize,
 }
 
-impl PrivateOodEvader {
+#[allow(dead_code)]
+impl PrivateZeroEvader {
 	pub(crate) fn new(k: usize, r_len: usize) -> Self {
+		assert!(
+			r_len >= ETA,
+			"PrivateZeroEvader: r_len ({r_len}) must be ≥ ETA ({ETA}) so M's columns span F^ETA"
+		);
 		Self { k, r_len }
+	}
+
+	/// Sample a fresh `ETA × r_len` matrix `M` from `rng`. With each row drawn
+	/// uniformly at random, `M`'s columns span `F^ETA` with probability `1 −
+	/// O(|F|^{-(r_len - ETA)})`. For `r_len = ETA` this is full-rank w.h.p.
+	pub(crate) fn sample_matrix<R: rand::RngCore + rand::CryptoRng>(
+		&self,
+		rng: &mut R,
+	) -> Vec<Vec<Goldilocks4>> {
+		(0..ETA)
+			.map(|_| (0..self.r_len).map(|_| rand_field(rng)).collect())
+			.collect()
+	}
+
+	/// Sample fresh randomness `r ∈ F^{r_len}` for the OOD step.
+	pub(crate) fn sample_r<R: rand::RngCore + rand::CryptoRng>(
+		&self,
+		rng: &mut R,
+	) -> Vec<Goldilocks4> {
+		(0..self.r_len).map(|_| rand_field(rng)).collect()
 	}
 
 	/// `apply(msg, r, seeds, m_matrix)[i] = ze(seeds[i])·msg + m_matrix[i]·r`.
@@ -114,8 +139,78 @@ impl PrivateOodEvader {
 	}
 }
 
+/// Verifier-side handle reconstructing the per-seed Lemma 9.3 row at fold time.
+///
+/// The full row is `(1, seed, seed², …, seed^{k-1}, M[i, 0], …, M[i, r_len-1])`,
+/// length `k + r_len`. Stored implicitly here as `(seed, m_row)`.
+///
+/// Wired but not yet active — see [`PrivateZeroEvader`].
+#[allow(dead_code)]
+pub(crate) struct PrivateOodHandle {
+	pub(crate) k: usize,
+	pub(crate) r_len: usize,
+	pub(crate) seed: Goldilocks4,
+	pub(crate) m_row: Vec<Goldilocks4>,
+}
+
+#[allow(dead_code)]
+impl PrivateOodHandle {
+	pub(crate) fn new(k: usize, seed: Goldilocks4, m_row: Vec<Goldilocks4>) -> Self {
+		Self {
+			k,
+			r_len: m_row.len(),
+			seed,
+			m_row,
+		}
+	}
+}
+
+impl LinearFormHandle for PrivateOodHandle {
+	type Alphabet = Goldilocks4;
+
+	fn form_size(&self) -> usize {
+		self.k + self.r_len
+	}
+
+	fn folded_form(&self, rand: &[Self::Alphabet]) -> Vec<Self::Alphabet> {
+		let n = self.form_size();
+		assert!(
+			n.is_power_of_two(),
+			"PrivateOodHandle: form_size must be a power of two; got {n}"
+		);
+		assert!(rand.len() <= n.ilog2() as usize);
+		let mut values: Vec<Goldilocks4> = Vec::with_capacity(n);
+		let mut p = Goldilocks4::ONE;
+		for _ in 0..self.k {
+			values.push(p);
+			p *= self.seed;
+		}
+		values.extend_from_slice(&self.m_row);
+		for &w in rand {
+			let half = values.len() / 2;
+			values = (0..half)
+				.map(|k| values[k] + (values[k + half] - values[k]) * w)
+				.collect();
+		}
+		values
+	}
+}
+
+/// Sample a uniformly random `Goldilocks4` by rejection.
+#[allow(dead_code)]
+fn rand_field<R: rand::RngCore + rand::CryptoRng>(rng: &mut R) -> Goldilocks4 {
+	loop {
+		let mut bytes = [0u8; 32];
+		rng.fill_bytes(&mut bytes);
+		if let Some(g) = Goldilocks4::from_bytes(&bytes) {
+			return g;
+		}
+	}
+}
+
 // ---------------------------------------------------------------------------
-// Prover-side: OodEvader
+// Prover-side: OodEvader  (TODO: remove once Construction 9.7 is wired into
+// codeswitch.rs at Task 10; PrivateZeroEvader becomes the only OOD path.)
 // ---------------------------------------------------------------------------
 
 /// DEEP-FRI out-of-domain evader. Each call issues `η` linear-form constraints
@@ -314,5 +409,80 @@ mod tests {
 		let h = OodEvaderHandle::new(8);
 		let handles = h.zero_evader_handles(&[g4(3), g4(7)]);
 		assert_eq!(handles.len(), 2);
+	}
+
+	// -----------------------------------------------------------------------
+	// PrivateZeroEvader (Lemma 9.3) tests
+	// -----------------------------------------------------------------------
+
+	#[test]
+	fn private_apply_matches_expanded_constraint_dot_product() {
+		use rand::SeedableRng;
+		use rand_chacha::ChaCha20Rng;
+		let mut rng = ChaCha20Rng::seed_from_u64(0);
+		let pze = PrivateZeroEvader::new(8, 4);
+		let msg: Vec<_> = (0..8).map(|i| g4(i as u64)).collect();
+		let r: Vec<_> = (0..4).map(|i| g4(100 + i as u64)).collect();
+		let seeds = [g4(3), g4(7)];
+		let m_matrix = pze.sample_matrix(&mut rng);
+
+		let y = pze.apply(&msg, &r, &seeds, &m_matrix);
+		let rows = pze.expanded_constraint(&seeds, &m_matrix);
+		let combined: Vec<_> = msg.iter().chain(r.iter()).copied().collect();
+		for (yi, row) in y.iter().zip(rows.iter()) {
+			let dot: Goldilocks4 = row.iter().zip(&combined).map(|(a, b)| *a * *b).sum();
+			assert_eq!(*yi, dot);
+		}
+	}
+
+	#[test]
+	fn private_apply_specializes_to_polynomial_evaluation_when_m_zero() {
+		// If M's rows are zero, the OOD answer reduces to ze(seed)·msg.
+		let pze = PrivateZeroEvader::new(3, 2);
+		let msg = vec![g4(1), g4(2), g4(3)];
+		let r = vec![g4(99), g4(88)];
+		let seeds = [g4(5), g4(2)];
+		let m_matrix: Vec<Vec<Goldilocks4>> = (0..ETA)
+			.map(|_| vec![Goldilocks4::ZERO; 2])
+			.collect();
+		assert_eq!(pze.apply(&msg, &r, &seeds, &m_matrix), vec![g4(86), g4(17)]);
+	}
+
+	#[test]
+	fn private_handle_no_fold_returns_powers_then_m_row() {
+		let pze = PrivateZeroEvader::new(8, 8); // k + r_len = 16, log = 4
+		let seed = g4(5);
+		let m_row: Vec<Goldilocks4> = (0..8).map(|i| g4(1000 + i as u64)).collect();
+		let handle = PrivateOodHandle::new(pze.k, seed, m_row.clone());
+		let got = handle.folded_form(&[]);
+		let expected: Vec<Goldilocks4> = (0..8)
+			.map(|i| seed.pow(i as u64))
+			.chain(m_row.iter().copied())
+			.collect();
+		assert_eq!(got, expected);
+	}
+
+	#[test]
+	fn private_handle_one_fold_matches_manual() {
+		let pze = PrivateZeroEvader::new(8, 8);
+		let seed = g4(3);
+		let m_row: Vec<Goldilocks4> = (0..8).map(|i| g4(200 + i as u64)).collect();
+		let handle = PrivateOodHandle::new(pze.k, seed, m_row.clone());
+		let w = g4(11);
+		let row: Vec<Goldilocks4> = (0..8)
+			.map(|i| seed.pow(i as u64))
+			.chain(m_row.iter().copied())
+			.collect();
+		let half = row.len() / 2;
+		let manual: Vec<_> = (0..half)
+			.map(|k| row[k] + (row[k + half] - row[k]) * w)
+			.collect();
+		assert_eq!(handle.folded_form(&[w]), manual);
+	}
+
+	#[test]
+	#[should_panic(expected = "r_len")]
+	fn private_zero_evader_rejects_r_len_below_eta() {
+		let _ = PrivateZeroEvader::new(8, ETA - 1);
 	}
 }

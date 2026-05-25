@@ -24,7 +24,9 @@ use super::commitment::{
 	CodeCommitmentProverState, ExplicitCodeCommitmentHandle, FoldedCodeCommitmentHandle,
 };
 use super::linear_form::{FoldedFormHandle, LinearConstraint, LinearForm, LinearFormHandle};
-use super::vc::VectorCommitment;
+use super::mask_stack::MaskOracleHandle;
+use super::vc::{MerkleVc, VectorCommitment};
+use crate::field::Goldilocks4;
 
 // ---------------------------------------------------------------------------
 // Shared MSB half-split fold
@@ -96,11 +98,14 @@ fn round_poly<F: effsc::field::SumcheckField>(a: &[F], b: &[F]) -> (F, F) {
 pub(crate) const HVZK_MASK_LENGTH: usize = 3;
 
 /// Prove `⟨msg, α⟩ = claimed_value` (the sumcheck reduction step). Returns
-/// the folded commitment state and folded linear form.
+/// `(folded_state, folded_constraint, challenges, mask_rlc)`. The
+/// `challenges` are the sumcheck challenges `(γ_1, …, γ_k)` in order. The
+/// `mask_rlc` is `ε` for HVZK mode and `EC::Alphabet::ONE` for non-HVZK.
 ///
 /// `mask_coeffs`: if empty, vanilla sumcheck. If non-empty, must be exactly
 /// `num_rounds · HVZK_MASK_LENGTH` field elements; runs the HVZK variant
 /// (Construction 6.3 of eprint 2026/391).
+#[allow(clippy::type_complexity)]
 pub(crate) fn prove_sumcheck<EC, VC>(
 	transcript: &mut ProverState,
 	input: CodeCommitmentProverState<InterleavedCode<EC>, VC>,
@@ -109,6 +114,8 @@ pub(crate) fn prove_sumcheck<EC, VC>(
 ) -> (
 	super::commitment::FoldedCodeCommitmentProverState<EC, VC>,
 	LinearForm<EC::InputAlphabet>,
+	Vec<EC::Alphabet>,
+	EC::Alphabet,
 )
 where
 	EC: LinearCode,
@@ -152,6 +159,7 @@ where
 	}
 
 	let mut prev_challenge: Option<EC::Alphabet> = None;
+	let mut all_challenges: Vec<EC::Alphabet> = Vec::with_capacity(num_rounds);
 	let half_inv: EC::Alphabet = {
 		// half = 2^{-1}. char(F) ≠ 2 is required; Goldilocks satisfies this.
 		(EC::Alphabet::ONE + EC::Alphabet::ONE)
@@ -171,6 +179,7 @@ where
 			transcript.prover_message(&q0);
 			transcript.prover_message(&q_inf);
 			let r: EC::Alphabet = transcript.verifier_message();
+			all_challenges.push(r);
 			prev_challenge = Some(r);
 			continue;
 		}
@@ -195,6 +204,7 @@ where
 		transcript.prover_message(&h_inf);
 
 		let r: EC::Alphabet = transcript.verifier_message();
+		all_challenges.push(r);
 		// Update sum_running (sumcheck part) and mask_sum (mask part).
 		// new_sum = q(r) = q0 + q1·r + q_inf·r²
 		// new_mask_sum = univariate(r) − mask_rlc · new_sum
@@ -216,7 +226,160 @@ where
 			msg: a,
 		},
 		LinearForm::new(b),
+		all_challenges,
+		mask_rlc,
 	)
+}
+
+// ---------------------------------------------------------------------------
+// HVZK wrappers — sumcheck with mask oracle commits (Construction 6.3)
+// ---------------------------------------------------------------------------
+
+/// HVZK sumcheck IOR (Construction 6.3) — prover side. Wraps `prove_sumcheck`
+/// with the mask oracle commit + carry-through plumbing per ZKWHIR.md §4.3:
+/// 1. Deterministically derive `k` univariate mask polynomials of degree
+///    `< L_ZK = 3` from `(mask_seed, salt)`.
+/// 2. Encode each under `C_zk` with the Prop 3.19 ZK encoding and commit
+///    its Merkle root to the transcript.
+/// 3. Run `prove_sumcheck` with the mask coefficients; the masked-round-poly
+///    math runs and the sumcheck-internal HVZK randomness is consumed.
+/// 4. Return the folded state, folded constraint, mask oracle handles
+///    (to push onto the mask stack), the sumcheck challenges, ε, and the
+///    per-mask `μ_j` evaluations.
+#[allow(clippy::type_complexity)]
+pub(crate) fn prove_sumcheck_zk(
+	transcript: &mut ProverState,
+	input: CodeCommitmentProverState<
+		InterleavedCode<super::code::ReedSolomon<Goldilocks4>>,
+		MerkleVc,
+	>,
+	constraint: LinearForm<Goldilocks4>,
+	mask_seed: &[u8; 32],
+	salt: &[u8],
+) -> (
+	super::commitment::FoldedCodeCommitmentProverState<
+		super::code::ReedSolomon<Goldilocks4>,
+		MerkleVc,
+	>,
+	LinearForm<Goldilocks4>,
+	Vec<MaskOracleHandle>,
+	Vec<Goldilocks4>,
+	Goldilocks4,
+	Vec<Goldilocks4>,
+) {
+	let interleaving = input.code.interleaving_factor();
+	let k = interleaving.ilog2() as usize;
+	let l_zk = crate::params::Params::L_ZK;
+	let l_zk_inner = crate::params::Params::M_ZK - crate::params::Params::T_ZK;
+	let t_zk = crate::params::Params::T_ZK;
+	let zk_enc = super::encoding::ZkEncoding::new(l_zk_inner, t_zk);
+
+	// 1. Derive k mask polynomials (each L_ZK coefficients) and embed in
+	//    length-L_ZK_INNER C_zk messages. Encode and commit Merkle roots.
+	//    Capture each polynomial for the later μ_j computation.
+	let mut all_mask_coeffs: Vec<Goldilocks4> = Vec::with_capacity(k * HVZK_MASK_LENGTH);
+	let mut mask_handles: Vec<MaskOracleHandle> = Vec::with_capacity(k);
+	let mut mask_polys: Vec<Vec<Goldilocks4>> = Vec::with_capacity(k);
+	for j in 0..k {
+		let mut poly_salt = salt.to_vec();
+		poly_salt.extend_from_slice(b"::poly::");
+		poly_salt.extend_from_slice(&(j as u64).to_le_bytes());
+		let s_j_poly = super::base_case::derive_field_vec(mask_seed, &poly_salt, l_zk);
+		all_mask_coeffs.extend_from_slice(&s_j_poly);
+
+		let mut s_j_msg = vec![Goldilocks4::ZERO; l_zk_inner];
+		for (i, c) in s_j_poly.iter().enumerate() {
+			s_j_msg[i] = *c;
+		}
+		let mut r_salt = salt.to_vec();
+		r_salt.extend_from_slice(b"::r::");
+		r_salt.extend_from_slice(&(j as u64).to_le_bytes());
+		let s_j_r = super::base_case::derive_field_vec(mask_seed, &r_salt, t_zk);
+		let s_j_codeword = zk_enc.encode_with(&s_j_msg, &s_j_r);
+		let s_j_leaves: Vec<Vec<Goldilocks4>> =
+			s_j_codeword.iter().map(|&x| vec![x]).collect();
+		let s_j_vc = MerkleVc::new(s_j_codeword.len());
+		let (s_j_root, s_j_state) = s_j_vc.commit(&s_j_leaves);
+		transcript.prover_message(&s_j_root);
+		mask_polys.push(s_j_poly);
+		mask_handles.push(MaskOracleHandle::new_sumcheck(
+			s_j_msg, s_j_r, s_j_vc, s_j_state, s_j_root,
+		));
+	}
+
+	// 2. Run the existing prove_sumcheck with masks active. This consumes
+	//    the masks via the round-poly construction, samples k γ_j challenges,
+	//    and produces the final folded state + constraint.
+	let (folded_state, folded_constraint, challenges, epsilon) =
+		prove_sumcheck(transcript, input, constraint, &all_mask_coeffs);
+
+	// 3. Compute and send each μ_j = s_j_poly(γ_j) (the per-mask local
+	//    evaluation). This is the value the base case's joint check will
+	//    consume; sending it now binds the prover to it via the
+	//    Fiat–Shamir transcript so subsequent IORs can't equivocate.
+	//    Since each s_j is a freshly-sampled random polynomial, s_j(γ_j)
+	//    is a uniform random field element independent of the witness `f`
+	//    — sending it leaks nothing about `f`.
+	let mut mask_targets: Vec<Goldilocks4> = Vec::with_capacity(k);
+	for (s_j_poly, gamma) in mask_polys.iter().zip(&challenges) {
+		// Horner evaluation: s_j(γ) = s_j_poly[0] + s_j_poly[1]·γ + s_j_poly[2]·γ².
+		let mut acc = Goldilocks4::ZERO;
+		for c in s_j_poly.iter().rev() {
+			acc = acc * *gamma + *c;
+		}
+		transcript.prover_message(&acc);
+		mask_targets.push(acc);
+	}
+
+	(
+		folded_state,
+		folded_constraint,
+		mask_handles,
+		challenges,
+		epsilon,
+		mask_targets,
+	)
+}
+
+/// Verifier counterpart of `prove_sumcheck_zk`. Reads `k` mask Merkle roots
+/// from the transcript before invoking `verify_sumcheck` with `hvzk = true`,
+/// then reads the per-mask `μ_j` evaluations.
+#[allow(clippy::type_complexity)]
+pub(crate) fn verify_sumcheck_zk(
+	transcript: &mut VerifierState,
+	commitment: ExplicitCodeCommitmentHandle<
+		InterleavedCode<super::code::ReedSolomon<Goldilocks4>>,
+		MerkleVc,
+	>,
+	constraint: LinearConstraint<FoldedFormHandle<Goldilocks4>>,
+) -> VerificationResult<(
+	FoldedCodeCommitmentHandle<super::code::ReedSolomon<Goldilocks4>, MerkleVc>,
+	LinearConstraint<FoldedFormHandle<Goldilocks4>>,
+	Vec<MaskOracleHandle>,
+	Vec<Goldilocks4>,
+	Goldilocks4,
+	Vec<Goldilocks4>,
+)> {
+	let k = commitment.code.interleaving_factor().ilog2() as usize;
+	let mut mask_handles: Vec<MaskOracleHandle> = Vec::with_capacity(k);
+	for _ in 0..k {
+		let root: [u8; 32] = transcript.prover_message()?;
+		mask_handles.push(MaskOracleHandle::verifier_root_only(root));
+	}
+	let (folded_commitment, folded_constraint, challenges, epsilon) =
+		verify_sumcheck(transcript, commitment, constraint, true)?;
+	let mut mask_targets: Vec<Goldilocks4> = Vec::with_capacity(k);
+	for _ in 0..k {
+		mask_targets.push(transcript.prover_message()?);
+	}
+	Ok((
+		folded_commitment,
+		folded_constraint,
+		mask_handles,
+		challenges,
+		epsilon,
+		mask_targets,
+	))
 }
 
 /// `eval_01(p) = p(0) + p(1)` for a length-`HVZK_MASK_LENGTH` univariate
@@ -251,8 +414,9 @@ fn inline_sumcheck_verify<F: WhirField>(
 	claimed_sum: F,
 	num_rounds: usize,
 	hvzk: bool,
-) -> VerificationResult<(F, Vec<F>)> {
+) -> VerificationResult<(F, Vec<F>, F)> {
 	let mut claim = claimed_sum;
+	let mut mask_rlc_out: F = F::ONE;
 
 	// HVZK setup: read mask_sum, send ε; adjust running claim accordingly.
 	if hvzk {
@@ -261,6 +425,7 @@ fn inline_sumcheck_verify<F: WhirField>(
 		// claim = mask_sum + mask_rlc · claim (the new running claim for the
 		// combined polynomial Σ s_j + ε · G).
 		claim = mask_sum + mask_rlc * claim;
+		mask_rlc_out = mask_rlc;
 	}
 
 	let mut challenges = Vec::with_capacity(num_rounds);
@@ -279,13 +444,14 @@ fn inline_sumcheck_verify<F: WhirField>(
 		claim = h0 + h1 * r + h_inf * r * r;
 	}
 
-	Ok((claim, challenges))
+	Ok((claim, challenges, mask_rlc_out))
 }
 
 /// Verify the sumcheck reduction. Returns the folded commitment handle and
-/// the folded linear-form claim.
-#[allow(clippy::type_complexity)] // the return is a generic tuple — aliasing it across both type
-// parameters adds more noise than it saves.
+/// the folded linear-form claim, along with the sumcheck challenges
+/// `(γ_1, …, γ_k)` and `mask_rlc` (= `ε` when `hvzk` is on, else
+/// `EC::Alphabet::ONE`).
+#[allow(clippy::type_complexity)]
 pub(crate) fn verify_sumcheck<EC, VC, LFH>(
 	transcript: &mut VerifierState,
 	commitment: ExplicitCodeCommitmentHandle<InterleavedCode<EC>, VC>,
@@ -294,6 +460,8 @@ pub(crate) fn verify_sumcheck<EC, VC, LFH>(
 ) -> VerificationResult<(
 	FoldedCodeCommitmentHandle<EC, VC>,
 	LinearConstraint<FoldedFormHandle<EC::Alphabet>>,
+	Vec<EC::Alphabet>,
+	EC::Alphabet,
 )>
 where
 	EC: LinearCode,
@@ -310,7 +478,7 @@ where
 	}
 
 	let num_rounds = n.ilog2() as usize;
-	let (final_claim, challenges) =
+	let (final_claim, challenges, mask_rlc) =
 		inline_sumcheck_verify(transcript, constraint.value, num_rounds, hvzk)?;
 
 	Ok((
@@ -321,9 +489,12 @@ where
 		LinearConstraint {
 			linear_form_handle: FoldedFormHandle {
 				linear_form_handle: Box::new(constraint.linear_form_handle),
-				rand: challenges,
+				rand: challenges.clone(),
+				scale: mask_rlc,
 			},
 			value: final_claim,
 		},
+		challenges,
+		mask_rlc,
 	))
 }

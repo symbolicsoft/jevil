@@ -11,7 +11,8 @@ use crate::transcript::{derive_betas, prefix_bytes};
 use crate::whir::{ConcreteWhirVerifier, LinearConstraint};
 use crate::{Error, PublicKey};
 
-/// Verify a Jevil signature.
+/// Verify a Jevil signature. Realizes `Jevil.Verify` of the paper
+/// (`§3.3, Construction 6`).
 ///
 /// Returns `Ok(())` iff the signature is valid for `(pk, params, msg)`.
 /// Returns one of:
