@@ -6,11 +6,12 @@
 //!   capacity 4, S-box `x⁷`). Arithmetic-friendly, used *only* inside WHIR for
 //!   its codeword vector commitment.
 //! - [`Family::Xof`]: **SHAKE256** (extendable-output). Used for seed
-//!   expansion, position derivation, and Fiat–Shamir.
+//!   expansion, position derivation, Fiat–Shamir, and per-signature
+//!   prover-randomness derivation.
 //!
 //! Every hash invocation is prefixed by an 8-byte ASCII *domain tag* that
-//! separates the four logical uses. The tags are exposed as module-level
-//! constants below.
+//! separates the seven logical uses (paper §2.2). The tags are exposed as
+//! module-level constants below.
 //!
 //! ## Serialisation format
 //!
@@ -39,9 +40,10 @@ use shake::{ExtendableOutput, Shake256, Update, XofReader};
 /// Domain tag for the seed-derived polynomial coefficients (XOF).
 pub(crate) const JV_SEED: [u8; 8] = *b"JV-SEED ";
 /// Domain tag for the seed-derived ZK encoding randomness (Prop. 3.19 of
-/// eprint 2026/391). Used to extend the committed message from `M` to `N`
-/// before NTT encoding so that any subset of ≤ `N − M` codeword positions
-/// reveals nothing about the honest coefficients.
+/// eprint 2026/391). Used **only** at `KeyGen` to extend the committed
+/// message from `M` to `N` before NTT encoding so that any subset of
+/// ≤ `N − M` codeword positions reveals nothing about the honest
+/// coefficients. Per-signature prover-side randomness uses [`JV_OPRD`].
 pub(crate) const JV_RZK: [u8; 8] = *b"JV-RZK  ";
 /// Domain tag for per-message position derivation (XOF).
 pub(crate) const JV_POSN: [u8; 8] = *b"JV-POSN ";
@@ -54,6 +56,16 @@ pub(crate) const JV_WHIR: [u8; 8] = *b"JV-WHIR ";
 /// invocation — consumed only by the Fiat–Shamir layer as the leading
 /// 8 bytes of the binding prefix per paper §4.2 step 4 / §4.3 step 3.
 pub(crate) const JV_OPEN: [u8; 8] = *b"JV-OPEN ";
+/// Domain tag for the per-signature prover-randomness derivation (XOF).
+/// Used by [`crate::sign`] to derive a deterministic seed from
+/// `(s, root, msg, y_1, …, y_K)` per paper §2.2 / §4.2 step 6; the resulting
+/// seed feeds **all** internal randomness consumed by `WHIR.Open` — sumcheck
+/// round-polynomial masks (Construction 6.3), code-switching mask oracles
+/// (Construction 9.7), and OOD answers (Lemma 9.3) — so that `Sign` is a
+/// pure function of `(sk, pk, msg)` rather than a sampler. The trailing two
+/// `0x20` bytes pad the seven-character `JV-OPRD` ASCII tag out to the
+/// fixed 8-byte slot.
+pub(crate) const JV_OPRD: [u8; 8] = *b"JV-OPRD ";
 
 // ---------------------------------------------------------------------------
 // Hash family selector
@@ -232,8 +244,11 @@ mod tests {
 		assert_eq!(&JV_FSCH, b"JV-FSCH ");
 		assert_eq!(&JV_WHIR, b"JV-WHIR ");
 		assert_eq!(&JV_OPEN, b"JV-OPEN ");
+		assert_eq!(&JV_OPRD, b"JV-OPRD ");
 		// Pairwise distinct as 8-byte strings.
-		let tags: [&[u8; 8]; 6] = [&JV_SEED, &JV_RZK, &JV_POSN, &JV_FSCH, &JV_WHIR, &JV_OPEN];
+		let tags: [&[u8; 8]; 7] = [
+			&JV_SEED, &JV_RZK, &JV_POSN, &JV_FSCH, &JV_WHIR, &JV_OPEN, &JV_OPRD,
+		];
 		for i in 0..tags.len() {
 			for j in (i + 1)..tags.len() {
 				assert_ne!(tags[i], tags[j]);

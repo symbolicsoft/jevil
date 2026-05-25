@@ -355,14 +355,22 @@ struct SOracleProverState {
 }
 
 /// Derive `count` `Goldilocks4` elements deterministically from
-/// `(mask_seed, purpose)` via the `JV-RZK` SHAKE256 stream with per-limb
+/// `(mask_seed, purpose)` via the `JV-OPRD` SHAKE256 stream with per-limb
 /// rejection sampling.
+///
+/// All per-signature WHIR-prover randomness — sumcheck round-polynomial
+/// masks (Construction 6.3), code-switching padding masks (Construction
+/// 9.7), and base-case mask companions (Construction 7.2) — flows through
+/// this function with `mask_seed = ρ` set by
+/// [`crate::sign::derive_prover_randomness_seed`]. Using `JV-OPRD` rather
+/// than `JV-RZK` keeps the spec's seven-tag domain separation intact
+/// (`JV-RZK` is reserved for `KeyGen`'s encoding randomness).
 pub(crate) fn derive_field_vec(
 	mask_seed: &[u8; 32],
 	purpose: &[u8],
 	count: usize,
 ) -> Vec<Goldilocks4> {
-	use crate::hash::{Family, JV_RZK, hash};
+	use crate::hash::{Family, JV_OPRD, hash};
 	if count == 0 {
 		return Vec::new();
 	}
@@ -371,11 +379,11 @@ pub(crate) fn derive_field_vec(
 	loop {
 		let extra = refill.to_le_bytes();
 		let stream = if refill == 0 {
-			hash(Family::Xof, JV_RZK, &[mask_seed, purpose], buffer_size)
+			hash(Family::Xof, JV_OPRD, &[mask_seed, purpose], buffer_size)
 		} else {
 			hash(
 				Family::Xof,
-				JV_RZK,
+				JV_OPRD,
 				&[mask_seed, purpose, &extra],
 				buffer_size,
 			)

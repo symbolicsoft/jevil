@@ -66,10 +66,12 @@ impl Signature {
 /// rebuilt via [`SignerCache::from_secret`]) for this `sk`; passing a cache
 /// from a different signer produces undefined output.
 ///
-/// The current `_sk` parameter is unused at sign-time — the cache already
-/// holds the only secret-derived value the signer needs — but it is kept in
-/// the API to mirror standard signature interfaces and to make it explicit
-/// that a `SecretKey` is required to call this function.
+/// `sk` is consumed to derive the per-signature prover-randomness seed
+/// `ρ = H_xof(JV-OPRD, s, root, msg, y_1, …, y_K; 32)` per paper §2.2 /
+/// Construction 5 step 6: that seed deterministically drives every
+/// internally-sampled value inside `WHIR.Open` (sumcheck masks,
+/// code-switching masks, OOD answers), so `Sign` is a pure function of
+/// `(sk, pk, msg)`.
 pub fn sign(
 	sk: &SecretKey,
 	pk: &PublicKey,
@@ -116,9 +118,14 @@ pub fn sign(
 		.instance(&prefix);
 	let mut transcript = domain.std_prover();
 
-	// Derive per-signature mask seed for the HVZK base case from
-	// (sk_seed, root, msg, ys). Deterministic, but unique per signature.
-	let mask_seed = derive_mask_seed(sk, &pk.root, msg, &ys);
+	// Derive the per-signature prover-randomness seed ρ from
+	// (sk_seed, root, msg, y_1, …, y_K) under the JV-OPRD domain tag
+	// (paper §2.2 / Construction 5 step 6). Deterministic but unique
+	// per signature; the seed drives every internally-sampled value
+	// inside `WHIR.Open` (sumcheck masks via Construction 6.3,
+	// code-switching masks via Construction 9.7, OOD answers via
+	// Lemma 9.3).
+	let mask_seed = derive_prover_randomness_seed(sk, &pk.root, msg, &ys);
 
 	let whir = ConcreteWhirProtocol::build(n, 32, 64);
 	whir.prove_to_transcript(
@@ -134,17 +141,39 @@ pub fn sign(
 	}
 }
 
-/// Derive the per-signature HVZK mask seed from
-/// `(sk_seed, root, msg, ys)`. Deterministic — the same `(sk, msg)` produces
-/// the same mask seed — but unique across messages, which is what HVZK
+/// Derive the per-signature prover-randomness seed `ρ` from
+/// `(sk_seed, root, msg, y_1, …, y_K)` per paper §2.2 / Construction 5
+/// step 6.
+///
+/// The hash inputs match the spec literally: the seed `s`, root, message,
+/// and each revealed evaluation `y_t` are passed as **separate**
+/// length-prefixed inputs to the length-prefix framing of [`crate::hash`],
+/// so the framing is `tag ‖ len_8(s) ‖ s ‖ len_8(root) ‖ root ‖
+/// len_8(msg) ‖ msg ‖ len_8(y_1) ‖ y_1 ‖ … ‖ len_8(y_K) ‖ y_K`. This
+/// matches the spec's `H_xof(JV-OPRD, s, root, M, y_1, …, y_K; ∞)`
+/// exactly, except we truncate the XOF stream at 32 bytes and re-expand
+/// downstream via `derive_field_vec` (which is itself JV-OPRD-tagged) —
+/// security-equivalent in the random-oracle model.
+///
+/// Deterministic — the same `(sk, pk, msg)` produces the same seed —
+/// but unique across messages and `y_t` tuples, which is what HVZK
 /// requires per signature.
-fn derive_mask_seed(sk: &SecretKey, root: &[u8; 32], msg: &[u8], ys: &[Goldilocks4]) -> [u8; 32] {
-	use crate::hash::{Family, JV_RZK, hash};
-	let mut ys_bytes = Vec::with_capacity(ys.len() * 32);
-	for y in ys {
-		ys_bytes.extend_from_slice(&y.to_bytes());
+fn derive_prover_randomness_seed(
+	sk: &SecretKey,
+	root: &[u8; 32],
+	msg: &[u8],
+	ys: &[Goldilocks4],
+) -> [u8; 32] {
+	use crate::hash::{Family, JV_OPRD, hash};
+	let y_bytes: Vec<[u8; 32]> = ys.iter().map(|y| y.to_bytes()).collect();
+	let mut inputs: Vec<&[u8]> = Vec::with_capacity(3 + ys.len());
+	inputs.push(sk.seed());
+	inputs.push(root);
+	inputs.push(msg);
+	for yb in &y_bytes {
+		inputs.push(yb);
 	}
-	let h = hash(Family::Xof, JV_RZK, &[sk.seed(), root, msg, &ys_bytes], 32);
+	let h = hash(Family::Xof, JV_OPRD, &inputs, 32);
 	let mut out = [0u8; 32];
 	out.copy_from_slice(&h);
 	out
