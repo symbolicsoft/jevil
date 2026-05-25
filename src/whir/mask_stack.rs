@@ -292,10 +292,7 @@ impl MaskStack {
 	/// on just the main-message part), then adds back `ε · this_value` to
 	/// restore the joint formulation.
 	pub fn joint_mask_value(&self) -> Goldilocks4 {
-		self.constraints
-			.iter()
-			.map(|mc| mc.alpha * mc.target)
-			.sum()
+		self.constraints.iter().map(|mc| mc.alpha * mc.target).sum()
 	}
 
 	/// Push one randomness-padding mask introduced by a code-switching round.
@@ -320,7 +317,10 @@ impl MaskStack {
 /// `(1, γ, γ², 0, …, 0)` of length `L_ZK_INNER = M_ZK − T_ZK`.
 pub(crate) fn build_sumcheck_sl(gamma: Goldilocks4) -> Vec<Goldilocks4> {
 	let l_zk_inner = crate::params::Params::M_ZK - crate::params::Params::T_ZK;
-	debug_assert!(l_zk_inner >= 3, "L_ZK_INNER must accommodate degree-2 mask polynomial");
+	debug_assert!(
+		l_zk_inner >= 3,
+		"L_ZK_INNER must accommodate degree-2 mask polynomial"
+	);
 	let mut sl = vec![Goldilocks4::ZERO; l_zk_inner];
 	sl[0] = Goldilocks4::ONE;
 	sl[1] = gamma;

@@ -442,9 +442,8 @@ mod tests {
 		let msg = vec![g4(1), g4(2), g4(3)];
 		let r = vec![g4(99), g4(88)];
 		let seeds = [g4(5), g4(2)];
-		let m_matrix: Vec<Vec<Goldilocks4>> = (0..ETA)
-			.map(|_| vec![Goldilocks4::ZERO; 2])
-			.collect();
+		let m_matrix: Vec<Vec<Goldilocks4>> =
+			(0..ETA).map(|_| vec![Goldilocks4::ZERO; 2]).collect();
 		assert_eq!(pze.apply(&msg, &r, &seeds, &m_matrix), vec![g4(86), g4(17)]);
 	}
 

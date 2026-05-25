@@ -26,22 +26,22 @@ use std::sync::Arc;
 
 use spongefish::{ProverState, VerificationResult, VerifierState};
 
+use super::base_case::{BaseCase, verify_base_case};
 use super::code::{InterleavedCode, ReedSolomon};
 use super::codeswitch::CodeswitchHandle;
 use super::commitment::{
 	CodeCommitment, CodeCommitmentHandle, CodeCommitmentProverHandle, ExplicitCodeCommitmentHandle,
 	FoldedCodeCommitmentHandle, FoldedCodeCommitmentProverState,
 };
+use super::evader::{ETA, OodEvader, OodEvaderHandle};
 use super::linear_form::{
 	FoldedFormHandle, LinearCombinationForm, LinearConstraint, LinearForm, LinearFormHandle,
 };
+use super::mask_stack::MaskStack;
 use super::transcript_io::{
 	read_opening, sample_positions_prover, sample_positions_verifier, write_opening,
 };
-use super::base_case::{BaseCase, verify_base_case};
-use super::mask_stack::MaskStack;
-use super::vc::MerkleVc;
-use super::evader::{ETA, OodEvader, OodEvaderHandle};
+use super::vc::{MerkleVc, VectorCommitment};
 use crate::field::Goldilocks4;
 
 // ---------------------------------------------------------------------------
@@ -96,10 +96,39 @@ impl ProverCodeswitch {
 			.output_commitment
 			.commit(transcript, input.msg().to_vec());
 
+		// Construction 9.7 (privacy padding for OOD). Commit a fresh
+		// C_zk-encoded padding mask whose first ETA entries (= r') will be
+		// added to the ETA OOD answers to make them statistically
+		// independent of the witness. The verifier reads the root,
+		// reconstructs the OOD answers' sl_o contribution at the
+		// joint-target check, and verifies codeword consistency at the
+		// base case.
+		let l_zk_inner = crate::params::Params::M_ZK - crate::params::Params::T_ZK;
+		let t_zk = crate::params::Params::T_ZK;
+		let zk_enc = super::encoding::ZkEncoding::new(l_zk_inner, t_zk);
+		let padding_msg = super::base_case::derive_field_vec(
+			mask_seed,
+			&codeswitch_pad_msg_salt(salt),
+			l_zk_inner,
+		);
+		let padding_r =
+			super::base_case::derive_field_vec(mask_seed, &codeswitch_pad_r_salt(salt), t_zk);
+		let padding_codeword = zk_enc.encode_with(&padding_msg, &padding_r);
+		let padding_leaves: Vec<Vec<Goldilocks4>> =
+			padding_codeword.iter().map(|&x| vec![x]).collect();
+		let padding_vc = super::vc::MerkleVc::new(padding_codeword.len());
+		let (padding_root, padding_vc_state) = padding_vc.commit(&padding_leaves);
+		transcript.prover_message(&padding_root);
+
 		// Spec §2.3 fixes η = 2: draw two independent OOD seeds, then return
 		// two evaluations and two corresponding linear-form constraints.
 		let ood_seeds: Vec<Goldilocks4> = (0..ETA).map(|_| transcript.verifier_message()).collect();
-		let ood_answers = self.ood_ze.apply(&output.msg, &ood_seeds);
+		// Privacy-padded OOD: y_i = ze(ρ_i)·folded_msg + padding_msg[i] for
+		// i ∈ [ETA]. The first ETA entries of padding_msg are the fresh r'.
+		let mut ood_answers = self.ood_ze.apply(&output.msg, &ood_seeds);
+		for (i, y) in ood_answers.iter_mut().enumerate() {
+			*y += padding_msg[i];
+		}
 		transcript.prover_message(&ood_answers);
 
 		let positions = sample_positions_prover(transcript, self.queries, input.codeword_len());
@@ -109,7 +138,9 @@ impl ProverCodeswitch {
 
 		let batch_rand = transcript.verifier_messages_vec(ood_answers.len() + self.queries);
 
-		// Fold the OOD constraints into the accumulator.
+		// Fold the OOD constraints (the ze part only) into the accumulator.
+		// The privacy-padding part (r') is absorbed by the padding mask
+		// oracle pushed below; this keeps main_constraint k-dimensional.
 		for (i, ze_constraint) in self
 			.ood_ze
 			.expanded_constraint(&ood_seeds)
@@ -133,6 +164,32 @@ impl ProverCodeswitch {
 		}
 		constraint += LinearForm::new(input.code().apply_transpose(&selector));
 
+		// Build the padding mask's sl_o and target. sl_o has batch_rand[0..ETA]
+		// in its first ETA slots and zeros elsewhere — this picks out the
+		// r' = padding_msg[..ETA] entries when evaluated against the mask.
+		let mut padding_sl_o = vec![Goldilocks4::ZERO; l_zk_inner];
+		padding_sl_o[..ETA].copy_from_slice(&batch_rand[..ETA]);
+		let padding_target: Goldilocks4 = padding_sl_o
+			.iter()
+			.zip(&padding_msg)
+			.map(|(a, b)| *a * *b)
+			.sum();
+		transcript.prover_message(&padding_target);
+
+		// Push the padding mask onto the stack with (α=1, sl_o, target=μ).
+		let padding_handle = super::mask_stack::MaskOracleHandle::new_sumcheck(
+			padding_msg,
+			padding_r,
+			padding_vc,
+			padding_vc_state,
+			padding_root,
+		);
+		mask_stack.push_padding_mask(padding_handle, Goldilocks4::ONE, padding_sl_o);
+		// `push_padding_mask` leaves target=ZERO; patch it.
+		if let Some(last_mc) = mask_stack.constraints.last_mut() {
+			last_mc.target = padding_target;
+		}
+
 		// HVZK sumcheck. Carry-in handling: the prover's running sum for the
 		// sumcheck is ⟨a, b⟩, which equals the verifier's claim MINUS the
 		// carry-in mask contribution mask_carry_in_pre. The verifier
@@ -142,14 +199,25 @@ impl ProverCodeswitch {
 		// to restore the joint claim. The prover doesn't track claim
 		// explicitly; downstream IORs read coefficients/mask_stack.
 		let (folded_state, folded_constraint, mask_handles, gammas, epsilon, mask_targets) =
-			super::sumcheck::prove_sumcheck_zk(
-				transcript, output, constraint, mask_seed, salt,
-			);
+			super::sumcheck::prove_sumcheck_zk(transcript, output, constraint, mask_seed, salt);
 		mask_stack.scale_alphas(epsilon);
 		mask_stack.push_sumcheck_masks(mask_handles, gammas, mask_targets);
 		let folded_constraint = folded_constraint * epsilon;
 		(folded_constraint, folded_state)
 	}
+}
+
+/// Salt builders for the per-codeswitch padding mask derivations.
+fn codeswitch_pad_msg_salt(salt: &[u8]) -> Vec<u8> {
+	let mut s = salt.to_vec();
+	s.extend_from_slice(b"::cs::pad_msg");
+	s
+}
+
+fn codeswitch_pad_r_salt(salt: &[u8]) -> Vec<u8> {
+	let mut s = salt.to_vec();
+	s.extend_from_slice(b"::cs::pad_r");
+	s
 }
 
 /// Runtime-sized WHIR prover specialised to (Goldilocks4 + RS + MerkleVc +
@@ -283,6 +351,9 @@ impl VerifierCodeswitch {
 			commitment: transcript.prover_message()?,
 		};
 
+		// Construction 9.7 padding mask root.
+		let padding_root: [u8; 32] = transcript.prover_message()?;
+
 		let ood_seeds: Vec<Goldilocks4> = (0..ETA).map(|_| transcript.verifier_message()).collect();
 		let ze_constraints = self.ood_ze.zero_evader_handles(&ood_seeds);
 		let ood_answers = transcript.prover_messages_vec::<Goldilocks4>(ze_constraints.len())?;
@@ -322,6 +393,25 @@ impl VerifierCodeswitch {
 			value += opening * batch_rand[ood_len + i];
 			forms.push(Box::new(input.code().apply_transpose_handle(pos)));
 			coeffs.push(batch_rand[ood_len + i]);
+		}
+
+		// Construction 9.7 padding mask: read its sent target and push onto
+		// the mask stack with sl_o = (batch_rand[0..ETA], 0, ..., 0). This
+		// captures the OOD answers' privacy-padding contribution into the
+		// joint mask formulation so subsequent base case checks balance.
+		let padding_target: Goldilocks4 = transcript.prover_message()?;
+		let l_zk_inner = crate::params::Params::M_ZK - crate::params::Params::T_ZK;
+		let mut padding_sl_o = vec![Goldilocks4::ZERO; l_zk_inner];
+		padding_sl_o[..ETA].copy_from_slice(&batch_rand[..ETA]);
+		let padding_mask_handle =
+			super::mask_stack::MaskOracleHandle::verifier_root_only(padding_root);
+		mask_stack.push_padding_mask(
+			padding_mask_handle,
+			<Goldilocks4 as effsc::field::SumcheckField>::ONE,
+			padding_sl_o,
+		);
+		if let Some(last_mc) = mask_stack.constraints.last_mut() {
+			last_mc.target = padding_target;
 		}
 
 		// Wrap in FoldedFormHandle so the type matches what verify_sumcheck_zk

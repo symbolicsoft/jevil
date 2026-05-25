@@ -92,8 +92,7 @@ fn cross_verification_rejected() {
 	let (pk_b, _sk_b, _cache_b) = keygen(&mut rng_b, params);
 	let sig_a = sign(&sk_a, &pk_a, &cache_a, params, b"target");
 	verify(&pk_a, params, b"target", &sig_a).expect("sig_a verifies under pk_a");
-	verify(&pk_b, params, b"target", &sig_a)
-		.expect_err("sig_a must NOT verify under pk_b");
+	verify(&pk_b, params, b"target", &sig_a).expect_err("sig_a must NOT verify under pk_b");
 }
 
 #[test]
@@ -112,10 +111,7 @@ fn deterministic_signatures_under_full_budget() {
 	}
 }
 
-fn full_budget_run(
-	params: Params,
-	seed: u64,
-) -> (jevil::PublicKey, Vec<jevil::Signature>) {
+fn full_budget_run(params: Params, seed: u64) -> (jevil::PublicKey, Vec<jevil::Signature>) {
 	let mut rng = ChaCha20Rng::seed_from_u64(seed);
 	let (pk, sk, cache) = keygen(&mut rng, params);
 	let sigs: Vec<_> = (0..params.n_star)

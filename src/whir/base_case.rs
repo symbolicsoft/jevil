@@ -123,11 +123,7 @@ impl BaseCase {
 		//    and per-mask μ_i' = sl_{o,i} · s_i_bc_msg (sent separately so
 		//    the verifier can do the per-mask local target check that binds
 		//    the carry-in μ_i = mc.target).
-		let mu_prime_main: Goldilocks4 = g_msg
-			.iter()
-			.zip(coefficients)
-			.map(|(g, c)| *g * *c)
-			.sum();
+		let mu_prime_main: Goldilocks4 = g_msg.iter().zip(coefficients).map(|(g, c)| *g * *c).sum();
 		let mu_prime_per_mask: Vec<Goldilocks4> = s_bc_states
 			.iter()
 			.zip(&mask_stack.constraints)
@@ -180,11 +176,8 @@ impl BaseCase {
 
 		// 8. Sample shared mask spot positions, then per mask open ξ_i and s_i_bc.
 		if !mask_stack.is_empty() {
-			let mask_positions = sample_positions_prover(
-				transcript,
-				self.mask_queries,
-				zk_enc.codeword_len,
-			);
+			let mask_positions =
+				sample_positions_prover(transcript, self.mask_queries, zk_enc.codeword_len);
 			for (s_bc, mask) in s_bc_states.iter().zip(&mask_stack.oracles) {
 				let mask_opening = mask.open(&mask_positions);
 				let s_bc_opening = s_bc.vc.open(&s_bc.vc_state, &mask_positions);
@@ -275,7 +268,8 @@ where
 	}
 
 	// 8. Main-code spot checks.
-	let positions = sample_positions_verifier(transcript, queries, folded_commitment.codeword_len());
+	let positions =
+		sample_positions_verifier(transcript, queries, folded_commitment.codeword_len());
 	let path_len = folded_commitment
 		.codeword_len()
 		.next_power_of_two()
@@ -379,7 +373,12 @@ pub(crate) fn derive_field_vec(
 		let stream = if refill == 0 {
 			hash(Family::Xof, JV_RZK, &[mask_seed, purpose], buffer_size)
 		} else {
-			hash(Family::Xof, JV_RZK, &[mask_seed, purpose, &extra], buffer_size)
+			hash(
+				Family::Xof,
+				JV_RZK,
+				&[mask_seed, purpose, &extra],
+				buffer_size,
+			)
 		};
 		let mut out = Vec::with_capacity(count);
 		let mut cursor = 0;
