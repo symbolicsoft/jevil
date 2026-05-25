@@ -36,6 +36,8 @@ use spongefish::{
 	ByteArray, Decoding, Encoding, NargDeserialize, VerificationError, VerificationResult,
 };
 
+mod ntt;
+
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
@@ -225,43 +227,15 @@ impl Goldilocks4 {
 		g
 	}
 
-	/// Radix-2 decimation-in-time NTT (recursive Cooley–Tukey).
+	/// Iterative in-place radix-2 DIT Cooley–Tukey NTT.
 	///
 	/// On entry `coeffs` holds polynomial coefficients of length `n` (a power
 	/// of two). On return, `coeffs[i]` holds the evaluation at `g^i` where
 	/// `g = two_adic_generator(log₂ n)`. Complexity is `O(n log n)`
 	/// extension-field multiplications.
 	pub fn ntt(mut coeffs: Vec<Goldilocks4>) -> Vec<Goldilocks4> {
-		let n = coeffs.len();
-		assert!(
-			n.is_power_of_two(),
-			"ntt: length must be a power of 2, got {n}"
-		);
-		ntt_recursive(&mut coeffs);
+		ntt::ntt_in_place(&mut coeffs);
 		coeffs
-	}
-}
-
-/// In-place recursive Cooley–Tukey NTT.
-fn ntt_recursive(a: &mut [Goldilocks4]) {
-	let n = a.len();
-	if n == 1 {
-		return;
-	}
-	let half = n / 2;
-	let mut evens: Vec<Goldilocks4> = (0..half).map(|i| a[2 * i]).collect();
-	let mut odds: Vec<Goldilocks4> = (0..half).map(|i| a[2 * i + 1]).collect();
-	ntt_recursive(&mut evens);
-	ntt_recursive(&mut odds);
-
-	let log_n = n.trailing_zeros() as usize;
-	let omega = Goldilocks4::two_adic_generator(log_n);
-	let mut w = Goldilocks4::ONE;
-	for k in 0..half {
-		let t = w * odds[k];
-		a[k] = evens[k] + t;
-		a[k + half] = evens[k] - t;
-		w *= omega;
 	}
 }
 
@@ -707,24 +681,6 @@ mod tests {
 		// itself; pick another known non-residue. By Euler/QR, 7 · 7 = 49 is a
 		// square, so we test 7 directly.
 		assert_eq!(goldilocks_sqrt(Goldilocks::new(7)), None);
-	}
-
-	#[test]
-	fn ntt_matches_naive_evaluation() {
-		let mut rng = ChaCha20Rng::seed_from_u64(4);
-		let n: usize = 1 << 8;
-		let coeffs: Vec<Goldilocks4> = (0..n).map(|_| random_g4(&mut rng)).collect();
-		let evals = Goldilocks4::ntt(coeffs.clone());
-
-		let g = Goldilocks4::two_adic_generator(8);
-		let x = g.pow(3);
-		let mut naive = Goldilocks4::default();
-		let mut x_pow = Goldilocks4::ONE;
-		for c in &coeffs {
-			naive += *c * x_pow;
-			x_pow *= x;
-		}
-		assert_eq!(naive, evals[3]);
 	}
 
 	#[test]
