@@ -6,9 +6,8 @@ use jevil::{Params, keygen, sign, verify};
 use rand::rngs::OsRng;
 
 fn main() {
-	// Pick a small budget so this example runs in a few hundred milliseconds.
 	// Params::new requires `n_star + 1` to be a power of two (1, 3, 7, 15, …).
-	let params = Params::new(7);
+	let params = Params::new(127);
 	println!(
 		"Jevil parameters · n* = {}, K = {}, M = {}, N = {}, T = {}, n_cliff = {}",
 		params.n_star,
