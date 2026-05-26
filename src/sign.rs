@@ -171,7 +171,7 @@ fn derive_prover_randomness_seed(
 	msg: &[u8],
 	ys: &[Goldilocks4],
 ) -> [u8; 32] {
-	use crate::hash::{Family, JV_OPRD, hash};
+	use crate::hash::{JV_OPRD, hash};
 	let y_bytes: Vec<[u8; 32]> = ys.iter().map(|y| y.to_bytes()).collect();
 	let mut inputs: Vec<&[u8]> = Vec::with_capacity(3 + ys.len());
 	inputs.push(sk.seed());
@@ -180,7 +180,7 @@ fn derive_prover_randomness_seed(
 	for yb in &y_bytes {
 		inputs.push(yb);
 	}
-	let h = hash(Family::Xof, JV_OPRD, &inputs, 32);
+	let h = hash(JV_OPRD, &inputs, 32);
 	let mut out = [0u8; 32];
 	out.copy_from_slice(&h);
 	out

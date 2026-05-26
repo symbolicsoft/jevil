@@ -10,8 +10,8 @@
 use spongefish::{Encoding, NargDeserialize};
 
 use crate::field::Goldilocks4;
-use crate::hash::{Family, JV_WHIR, hash};
-use crate::merkle::{MerkleTree, verify_path};
+use crate::hash::hash_vc_leaf;
+use crate::merkle::MerkleTree;
 
 /// An opened-position bundle for a vector commitment.
 #[derive(spongefish::Encoding, spongefish::NargDeserialize)]
@@ -23,18 +23,21 @@ pub(crate) struct Opening<VC: VectorCommitment> {
 }
 
 /// Abstract interface to a position-binding vector commitment.
+///
+/// The concrete `commit` entry point is provided by inherent methods on
+/// each implementor (e.g. [`MerkleVc::commit_slab`]) since jevil's only
+/// codeword shape is a flat [`super::code::CodewordSlab`]. The trait
+/// itself just bundles the associated types and the read-side methods
+/// shared by the verifier path.
 pub(crate) trait VectorCommitment: Sized {
 	/// Symbol type of the committed vector.
 	type Alphabet: Clone + Encoding;
 	/// Commitment digest type.
-	type Commitment: Encoding + NargDeserialize;
+	type Commitment: Encoding + NargDeserialize + Clone;
 	/// Proof type that accompanies an opening.
 	type OpeningProof: Encoding;
-	/// Prover-side state retained between [`Self::commit`] and [`Self::open`].
+	/// Prover-side state retained between commit and [`Self::open`].
 	type CommitState;
-
-	/// Commit to `input`. Returns the commitment digest and prover state.
-	fn commit(&self, input: &[Self::Alphabet]) -> (Self::Commitment, Self::CommitState);
 
 	/// Open the commitment at the given positions, returning the claimed
 	/// symbols together with a proof.
@@ -56,13 +59,8 @@ pub(crate) trait VectorCommitment: Sized {
 /// A binary Merkle vector commitment whose alphabet is `Vec<Goldilocks4>`
 /// (one position of an interleaved codeword).
 ///
-/// The leaf hash for position `i` is
-///
-/// ```text
-/// H_arith(JV-WHIR, concat(positions[i].iter().flat_map(|g| g.to_bytes())); 32)
-/// ```
-///
-/// where `H_arith` is the Poseidon2-Goldilocks sponge of [`crate::hash`].
+/// The leaf hash for position `i` is [`crate::hash::hash_vc_leaf`] applied
+/// to the position's Goldilocks4 symbols (H_VC^leaf per paper §3.4).
 pub(crate) struct MerkleVc {
 	/// Number of committed positions.
 	pub(crate) n: usize,
@@ -75,41 +73,45 @@ impl MerkleVc {
 	}
 }
 
+impl MerkleVc {
+	/// Flat-storage commit: hash each `width`-stride position of `slab` into
+	/// a Merkle leaf, build the tree, return `(root, (tree, slab))`. Used
+	/// by both the interleaved-codeword path (CodeCommitment::commit) and
+	/// the width-1 mask-leaf path.
+	pub(crate) fn commit_slab(
+		&self,
+		slab: super::code::CodewordSlab,
+	) -> ([u8; 32], (MerkleTree, super::code::CodewordSlab)) {
+		assert_eq!(
+			slab.positions(),
+			self.n,
+			"MerkleVc::commit_slab: positions ({}) != n ({})",
+			slab.positions(),
+			self.n
+		);
+		let leaf_hashes: Vec<[u8; 32]> = slab.iter_positions().map(hash_vc_leaf).collect();
+		let tree = MerkleTree::build_from_hashes(leaf_hashes);
+		let root = tree.root();
+		(root, (tree, slab))
+	}
+}
+
 impl VectorCommitment for MerkleVc {
 	type Alphabet = Vec<Goldilocks4>;
 	type Commitment = [u8; 32];
 	type OpeningProof = Vec<[u8; 32]>;
-	type CommitState = (MerkleTree, Vec<Vec<Goldilocks4>>);
-
-	fn commit(&self, input: &[Self::Alphabet]) -> (Self::Commitment, Self::CommitState) {
-		assert_eq!(
-			input.len(),
-			self.n,
-			"MerkleVc::commit: input length mismatch"
-		);
-		let leaf_hashes: Vec<[u8; 32]> = input
-			.iter()
-			.map(|symbols| {
-				let mut buf = Vec::with_capacity(symbols.len() * 32);
-				for s in symbols {
-					buf.extend_from_slice(&s.to_bytes());
-				}
-				let h = hash(Family::Arith, JV_WHIR, &[&buf], 32);
-				h.try_into().unwrap()
-			})
-			.collect();
-		let tree = MerkleTree::build_from_hashes(leaf_hashes);
-		let root = tree.root();
-		(root, (tree, input.to_vec()))
-	}
+	type CommitState = (MerkleTree, super::code::CodewordSlab);
 
 	fn open(&self, state: &Self::CommitState, indexes: &[usize]) -> Opening<Self> {
-		let (tree, input) = state;
-		let openings: Vec<Vec<Goldilocks4>> = indexes.iter().map(|&i| input[i].clone()).collect();
-		let mut vc_proof: Vec<[u8; 32]> = Vec::new();
-		for &i in indexes {
-			vc_proof.extend(tree.path(i));
-		}
+		let (tree, slab) = state;
+		// `openings` are in the caller's index order (matches `indexes[i]`).
+		let openings: Vec<Vec<Goldilocks4>> =
+			indexes.iter().map(|&i| slab.position(i).to_vec()).collect();
+		// `vc_proof` is a single BCS multiproof for the sorted-unique index set.
+		let mut sorted_unique: Vec<usize> = indexes.to_vec();
+		sorted_unique.sort_unstable();
+		sorted_unique.dedup();
+		let vc_proof = tree.multiproof(&sorted_unique);
 		Opening { openings, vc_proof }
 	}
 
@@ -122,24 +124,39 @@ impl VectorCommitment for MerkleVc {
 		if proof.openings.len() != indexes.len() {
 			return false;
 		}
-		let path_len = self.n.next_power_of_two().trailing_zeros() as usize;
-		if proof.vc_proof.len() != indexes.len() * path_len {
-			return false;
-		}
-		for (k, &i) in indexes.iter().enumerate() {
-			let mut buf = Vec::with_capacity(proof.openings[k].len() * 32);
-			for s in &proof.openings[k] {
-				buf.extend_from_slice(&s.to_bytes());
+		// Recompute leaf hashes in the input order (matches `indexes[i]`).
+		let leaf_hashes_input_order: Vec<[u8; 32]> = proof
+			.openings
+			.iter()
+			.map(|symbols| hash_vc_leaf(symbols))
+			.collect();
+
+		// Build the sorted-unique (index, leaf_hash) view. Duplicate indices
+		// must agree on the leaf hash.
+		let mut sorted_unique: Vec<(usize, [u8; 32])> = Vec::new();
+		for (k, &idx) in indexes.iter().enumerate() {
+			let leaf_hash = leaf_hashes_input_order[k];
+			match sorted_unique.binary_search_by_key(&idx, |&(x, _)| x) {
+				Ok(pos) => {
+					if sorted_unique[pos].1 != leaf_hash {
+						return false;
+					}
+				}
+				Err(pos) => {
+					sorted_unique.insert(pos, (idx, leaf_hash));
+				}
 			}
-			let leaf_hash: [u8; 32] = hash(Family::Arith, JV_WHIR, &[&buf], 32)
-				.try_into()
-				.unwrap();
-			let path = &proof.vc_proof[k * path_len..(k + 1) * path_len];
-			if !verify_path(*commitment, i, leaf_hash, path) {
-				return false;
-			}
 		}
-		true
+		let sorted_indices: Vec<usize> = sorted_unique.iter().map(|&(i, _)| i).collect();
+		let sorted_leaf_hashes: Vec<[u8; 32]> = sorted_unique.iter().map(|&(_, h)| h).collect();
+
+		crate::merkle::verify_multiproof(
+			*commitment,
+			self.n,
+			&sorted_indices,
+			&sorted_leaf_hashes,
+			&proof.vc_proof,
+		)
 	}
 }
 
@@ -161,13 +178,20 @@ mod tests {
 			.collect()
 	}
 
+	fn dummy_slab(n: usize, k: usize) -> super::super::code::CodewordSlab {
+		let mut data: Vec<Goldilocks4> = Vec::with_capacity(n * k);
+		for i in 0..n {
+			data.extend(dummy_symbols(i, k));
+		}
+		super::super::code::CodewordSlab::new(data, k)
+	}
+
 	#[test]
 	fn round_trip() {
 		let n = 64;
 		let k = 4;
 		let vc = MerkleVc::new(n);
-		let input: Vec<Vec<Goldilocks4>> = (0..n).map(|i| dummy_symbols(i, k)).collect();
-		let (commit, state) = vc.commit(&input);
+		let (commit, state) = vc.commit_slab(dummy_slab(n, k));
 		let indexes = [3, 17, 42, 50];
 		let opening = vc.open(&state, &indexes);
 		assert!(vc.verify(&commit, &indexes, &opening));
@@ -178,8 +202,7 @@ mod tests {
 		let n = 32;
 		let k = 4;
 		let vc = MerkleVc::new(n);
-		let input: Vec<Vec<Goldilocks4>> = (0..n).map(|i| dummy_symbols(i, k)).collect();
-		let (commit, state) = vc.commit(&input);
+		let (commit, state) = vc.commit_slab(dummy_slab(n, k));
 		let indexes = [10];
 		let mut opening = vc.open(&state, &indexes);
 		opening.openings[0][0] += Goldilocks4::ONE;

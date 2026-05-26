@@ -3,23 +3,27 @@
 use rand::{CryptoRng, RngCore};
 
 use crate::field::Goldilocks4;
-use crate::hash::{Family, JV_OOD, JV_SEED, hash};
+use crate::hash::{JV_OOD, JV_SEED, hash};
 use crate::params::Params;
 use crate::whir::{ConcreteWhirProtocol, WhirSignerState};
 use crate::{PublicKey, SecretKey};
 
 /// Cached signer state held in memory after [`keygen`] for fast signing.
 ///
-/// The cache stores the coefficient vector `c ∈ F^M` plus the opaque
-/// [`WhirSignerState`] produced by `WHIR.Commit`. The state holds whatever
-/// the WHIR primitive needs to drive `WHIR.Open` (the Prop. 3.19 encoding
-/// randomness, internalised inside the primitive); jevil never names it.
+/// The cache stores the coefficient vector `c ∈ F^M` plus an opaque
+/// WHIR-side state produced by `WHIR.Commit`. That state holds the
+/// Prop. 3.19 encoding randomness, the encoded codeword, and the
+/// initial Merkle tree; signing reuses it instead of rebuilding the
+/// tree per signature.
 ///
 /// A signer that has lost the cache can rebuild it from the
 /// [`SecretKey`] alone via [`SignerCache::from_secret`].
 ///
-/// `c` is *secret* material, so on drop we zeroize the vector contents
-/// (the internal WHIR state is also zeroised on drop).
+/// `c` is *secret* material, so on drop we zeroize the vector contents.
+/// The cached codeword is not strictly secret (public-derivable from
+/// `pk.root`) but lives on the same heap arenas; zeroized on drop for
+/// defense in depth. **Memory cost**: the cached codeword scales as
+/// ~4 N Goldilocks elements (~128 MB at n*=127, ~1 GB at n*=1023).
 pub struct SignerCache {
 	pub(crate) c: Vec<Goldilocks4>,
 	pub(crate) whir_state: WhirSignerState,
@@ -30,6 +34,15 @@ impl Drop for SignerCache {
 		use zeroize::Zeroize;
 		self.c.zeroize();
 		self.whir_state.internal.zeroize();
+		// The cached initial prover state holds the encoded codeword as
+		// its `msg` field. The codeword is not strictly secret (it's
+		// public-derivable from the published root) but lives on the same
+		// heap arenas as `c`; zeroize for defense in depth.
+		if let Some(state) = self.whir_state.initial_state.as_mut() {
+			for g in state.msg.iter_mut() {
+				g.zeroize();
+			}
+		}
 	}
 }
 
@@ -125,9 +138,9 @@ fn derive_field_elements(input: &[u8; 32], tag: [u8; 8], count: usize) -> Vec<Go
 	loop {
 		let extra = refill_tag.to_le_bytes();
 		let stream = if refill_tag == 0 {
-			hash(Family::Xof, tag, &[input], buffer_size)
+			hash(tag, &[input], buffer_size)
 		} else {
-			hash(Family::Xof, tag, &[input, &extra], buffer_size)
+			hash(tag, &[input, &extra], buffer_size)
 		};
 		let mut out = Vec::with_capacity(count);
 		let mut cursor = 0usize;

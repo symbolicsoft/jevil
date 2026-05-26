@@ -52,9 +52,9 @@ use super::mask_stack::MaskStack;
 use super::transcript_io::{
 	read_opening, sample_positions_prover, sample_positions_verifier, write_opening,
 };
-use super::vc::{MerkleVc, VectorCommitment};
+use super::vc::MerkleVc;
 use crate::field::Goldilocks4;
-use crate::hash::{Family, JV_RZK, hash};
+use crate::hash::{JV_RZK, hash};
 
 // ---------------------------------------------------------------------------
 // Constants matching the reference WHIR parameter set (paper §2.3)
@@ -126,10 +126,9 @@ impl ProverCodeswitch {
 		let padding_r =
 			super::base_case::derive_field_vec(mask_seed, &codeswitch_pad_r_salt(salt), t_zk);
 		let padding_codeword = zk_enc.encode_with(&padding_msg, &padding_r);
-		let padding_leaves: Vec<Vec<Goldilocks4>> =
-			padding_codeword.iter().map(|&x| vec![x]).collect();
-		let padding_vc = super::vc::MerkleVc::new(padding_codeword.len());
-		let (padding_root, padding_vc_state) = padding_vc.commit(&padding_leaves);
+		let padding_slab = super::code::CodewordSlab::new(padding_codeword, 1);
+		let padding_vc = super::vc::MerkleVc::new(padding_slab.positions());
+		let (padding_root, padding_vc_state) = padding_vc.commit_slab(padding_slab);
 		transcript.prover_message(&padding_root);
 
 		// Spec §2.3 fixes η = 2: draw two independent OOD seeds, then return
@@ -298,8 +297,14 @@ impl ConcreteWhirProtocol {
 		internal.extend_from_slice(c);
 		internal.extend(r_zk);
 
-		let (root, _state) = self.initial_commitment.commit_only(internal.clone());
-		(root, WhirSignerState { internal })
+		let (root, state) = self.initial_commitment.commit_only(internal.clone());
+		(
+			root,
+			WhirSignerState {
+				internal,
+				initial_state: Some(state),
+			},
+		)
 	}
 
 	/// `WHIR.Open(st, α_message, v) → π`, with the proof written into the
@@ -329,9 +334,17 @@ impl ConcreteWhirProtocol {
 		// codeswitch commits its Construction 9.7 padding mask and pushes
 		// that onto the stack too. The base case consumes the full stack
 		// via the joint Construction 7.2 target check.
-		let initial_state = self
-			.initial_commitment
-			.commit(transcript, state.internal.clone());
+		//
+		// Initial commit: reuse the cached prover state populated by
+		// `WhirSignerState::commit` at keygen time — write the root to the
+		// transcript and clone the cached state for this signature's
+		// sumcheck. Skips the initial Merkle tree rebuild entirely.
+		let cached_initial = state
+			.initial_state
+			.as_ref()
+			.expect("WhirSignerState::initial_state missing; keygen must populate it");
+		cached_initial.write_root_to(transcript);
+		let initial_state = cached_initial.clone();
 		let mut mask_stack = MaskStack::new();
 
 		let (mut folded_state, mut constraint, mask_handles, gammas, epsilon, mask_targets) =
@@ -418,15 +431,15 @@ impl VerifierCodeswitch {
 
 		// In a codeswitch round the queried commitment is the *previous* round's
 		// folded interleaved code, so each opening is a length-`INTERLEAVING`
-		// vector and the Merkle paths go up `log₂(codeword_len)` levels.
+		// vector. The Merkle proof is a BCS multiproof over the sorted-unique
+		// queried indices; both sides compute its size from the same indices.
 		let path_len_per_opening =
 			input.codeword_len().next_power_of_two().trailing_zeros() as usize;
-		let openings = read_opening(
-			transcript,
-			self.queries,
-			INTERLEAVING,
-			self.queries * path_len_per_opening,
-		)?;
+		let mut sorted_unique = positions.clone();
+		sorted_unique.sort_unstable();
+		sorted_unique.dedup();
+		let multiproof_bytes = crate::merkle::multiproof_size(&sorted_unique, path_len_per_opening);
+		let openings = read_opening(transcript, self.queries, INTERLEAVING, multiproof_bytes)?;
 		let opened = input.verify_openings(&positions, &openings)?;
 
 		let ood_len = ood_answers.len();
@@ -633,12 +646,25 @@ fn make_explicit_handle(inner_msg_len: usize) -> VerifierExplicit {
 // Length-M API support types
 // ===========================================================================
 
+/// Concrete prover state held by [`WhirSignerState::initial_state`]:
+/// the encoded codeword + initial Merkle tree at the WHIR-internal length.
+pub(crate) type ProverCommitState = super::commitment::CodeCommitmentProverState<
+	super::code::InterleavedCode<super::code::ReedSolomon<Goldilocks4>>,
+	super::vc::MerkleVc,
+>;
+
 /// Cached signer state returned by [`ConcreteWhirProtocol::commit`].
-/// Holds the WHIR-internal length-`N` vector (data slots in `[0, M)` plus
-/// encoding-randomness slots in `[M, N)`). Treat as opaque from outside
-/// this module.
+///
+/// Holds the WHIR-internal length-`N` data vector (`internal`, retained
+/// for the `SignerCache::from_secret` rebuild path) plus the cached
+/// initial prover state (`initial_state` — encoded codeword + initial
+/// Merkle tree). Caching `initial_state` lets `sign` skip rebuilding
+/// the largest Merkle tree of the protocol on every signature; the tree
+/// contents are public-derivable from the published `root`, so caching
+/// is sound. Treat as opaque from outside this module.
 pub(crate) struct WhirSignerState {
 	pub(crate) internal: Vec<Goldilocks4>,
+	pub(crate) initial_state: Option<ProverCommitState>,
 }
 
 /// Embed a length-`M` [`LinearFormHandle`] into the WHIR primitive's
@@ -704,9 +730,9 @@ fn derive_r_zk(sigma: &[u8; 32], count: usize) -> Vec<Goldilocks4> {
 	loop {
 		let extra = refill_tag.to_le_bytes();
 		let stream = if refill_tag == 0 {
-			hash(Family::Xof, JV_RZK, &[sigma], buffer_size)
+			hash(JV_RZK, &[sigma], buffer_size)
 		} else {
-			hash(Family::Xof, JV_RZK, &[sigma, &extra], buffer_size)
+			hash(JV_RZK, &[sigma, &extra], buffer_size)
 		};
 		let mut out = Vec::with_capacity(count);
 		let mut cursor = 0usize;

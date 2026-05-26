@@ -2,17 +2,17 @@
 //!
 //! This is a private utility — callers pass in pre-hashed leaves and get back
 //! a root plus path-extraction / path-verification routines. The internal-node
-//! hash uses [`crate::hash::JV_WHIR`] (Poseidon2-Goldilocks-12).
+//! hash uses [`crate::hash::hash_vc_node`] (H_VC^node per paper §3.4).
 //!
-//! ## Why the length-prefixed framing is safe to reuse
+//! ## Why leaf and internal-node hashes don't collide
 //!
-//! The same domain tag (`JV-WHIR`) is used for both leaf hashing (called by
-//! the vector-commitment layer in [`crate::whir::vc`]) and internal-node
-//! hashing here. This is fine because [`crate::hash::hash`] prefixes every
-//! input with its 8-byte length, so leaf inputs (variable length) cannot
-//! collide with internal-node inputs (always two 32-byte sibling hashes).
+//! Both invocations sit under the same `JV-WHIR` IV constituent of H_VC, but
+//! the IV's second slot distinguishes the two modes (`0` for leaves, `1` for
+//! internal nodes) — see [`crate::hash::hash_vc_leaf`] and
+//! [`crate::hash::hash_vc_node`]. Cross-mode collisions are bounded in the
+//! random-oracle model by the H_VC capacity.
 
-use crate::hash::{Family, JV_WHIR, hash};
+use crate::hash::hash_vc_node;
 
 /// A binary Merkle tree over pre-hashed leaves.
 ///
@@ -44,10 +44,7 @@ impl MerkleTree {
 			let prev = layers.last().unwrap();
 			let next: Vec<[u8; 32]> = prev
 				.chunks(2)
-				.map(|pair| {
-					let v = hash(Family::Arith, JV_WHIR, &[&pair[0], &pair[1]], 32);
-					v.try_into().unwrap()
-				})
+				.map(|pair| hash_vc_node(&pair[0], &pair[1]))
 				.collect();
 			layers.push(next);
 		}
@@ -59,41 +56,127 @@ impl MerkleTree {
 		self.layers.last().unwrap()[0]
 	}
 
-	/// The Merkle authentication path (sibling hashes, leaf layer to root) for
-	/// `leaf_idx`. The returned vector has length `log₂(num_leaves)`.
-	pub(crate) fn path(&self, mut leaf_idx: usize) -> Vec<[u8; 32]> {
-		assert!(leaf_idx < self.layers[0].len());
-		let mut path = Vec::with_capacity(self.layers.len() - 1);
+	/// BCS multiproof: emit only "outside" sibling hashes for the union of
+	/// authentication paths to `sorted_unique_indices`. `sorted_unique_indices`
+	/// MUST be sorted-ascending and deduplicated; the caller is responsible
+	/// for that normalization.
+	///
+	/// At each layer, walks the sorted frontier in order and emits a node's
+	/// sibling iff the sibling is not also a queried index at this layer.
+	/// Shared ancestors are emitted only once — see paper §3.5 ("Merkle
+	/// multiproof encoding").
+	pub(crate) fn multiproof(&self, sorted_unique_indices: &[usize]) -> Vec<[u8; 32]> {
+		use std::collections::BTreeSet;
+		debug_assert!(
+			sorted_unique_indices.windows(2).all(|w| w[0] < w[1]),
+			"multiproof: indices must be sorted-ascending and deduplicated"
+		);
+		let mut frontier: BTreeSet<usize> = sorted_unique_indices.iter().copied().collect();
+		let mut out = Vec::new();
 		for layer in &self.layers[..self.layers.len() - 1] {
-			let sib = leaf_idx ^ 1;
-			path.push(layer[sib]);
-			leaf_idx >>= 1;
+			let mut next: BTreeSet<usize> = BTreeSet::new();
+			for &i in &frontier {
+				let sib = i ^ 1;
+				if !frontier.contains(&sib) {
+					out.push(layer[sib]);
+				}
+				next.insert(i >> 1);
+			}
+			frontier = next;
 		}
-		path
+		out
 	}
 }
 
-/// Verify a Merkle authentication path against `root`. Returns `true` iff
-/// recomputing the path from `(leaf_hash, path)` yields `root`.
-pub(crate) fn verify_path(
-	root: [u8; 32],
-	mut leaf_idx: usize,
-	leaf_hash: [u8; 32],
-	path: &[[u8; 32]],
-) -> bool {
-	let mut cur = leaf_hash;
-	for &sib in path {
-		let (l, r) = if leaf_idx & 1 == 0 {
-			(cur, sib)
-		} else {
-			(sib, cur)
-		};
-		cur = hash(Family::Arith, JV_WHIR, &[&l, &r], 32)
-			.try_into()
-			.unwrap();
-		leaf_idx >>= 1;
+/// Pure function: how many sibling hashes a BCS multiproof for
+/// `sorted_unique_indices` in a balanced tree of `depth` levels emits.
+/// Both prover and verifier call this to size the transcript I/O for the
+/// multiproof bytes — `sample_positions_*` is deterministic, so both
+/// sides arrive at identical frontiers and identical counts.
+pub(crate) fn multiproof_size(sorted_unique_indices: &[usize], depth: usize) -> usize {
+	use std::collections::BTreeSet;
+	debug_assert!(
+		sorted_unique_indices.windows(2).all(|w| w[0] < w[1]),
+		"multiproof_size: indices must be sorted-ascending and deduplicated"
+	);
+	let mut frontier: BTreeSet<usize> = sorted_unique_indices.iter().copied().collect();
+	let mut count = 0usize;
+	for _ in 0..depth {
+		let mut next: BTreeSet<usize> = BTreeSet::new();
+		for &i in &frontier {
+			let sib = i ^ 1;
+			if !frontier.contains(&sib) {
+				count += 1;
+			}
+			next.insert(i >> 1);
+		}
+		frontier = next;
 	}
-	cur == root
+	count
+}
+
+/// Verify a BCS multiproof: given `root`, the queried `sorted_unique_indices`
+/// (matching the prover's normalization), the leaf hashes at those indices,
+/// and the pruned proof, reconstruct the tree level-by-level and check that
+/// the resulting root matches.
+pub(crate) fn verify_multiproof(
+	root: [u8; 32],
+	num_leaves: usize,
+	sorted_unique_indices: &[usize],
+	leaf_hashes: &[[u8; 32]],
+	proof: &[[u8; 32]],
+) -> bool {
+	use std::collections::BTreeMap;
+	if sorted_unique_indices.len() != leaf_hashes.len() {
+		return false;
+	}
+	if !sorted_unique_indices.windows(2).all(|w| w[0] < w[1]) {
+		return false;
+	}
+	let depth = num_leaves.next_power_of_two().trailing_zeros() as usize;
+
+	let mut nodes: BTreeMap<usize, [u8; 32]> = sorted_unique_indices
+		.iter()
+		.copied()
+		.zip(leaf_hashes.iter().copied())
+		.collect();
+	let mut proof_iter = proof.iter().copied();
+
+	for _ in 0..depth {
+		let mut next: BTreeMap<usize, [u8; 32]> = BTreeMap::new();
+		let entries: Vec<(usize, [u8; 32])> = nodes.iter().map(|(&k, &v)| (k, v)).collect();
+		let mut skip_next = false;
+		for (k, &(i, node_hash)) in entries.iter().enumerate() {
+			if skip_next {
+				skip_next = false;
+				continue;
+			}
+			let sib = i ^ 1;
+			let sib_hash = match entries.get(k + 1) {
+				Some(&(next_i, next_hash)) if next_i == sib => {
+					skip_next = true;
+					next_hash
+				}
+				_ => match proof_iter.next() {
+					Some(h) => h,
+					None => return false,
+				},
+			};
+			let (l, r) = if i & 1 == 0 {
+				(node_hash, sib_hash)
+			} else {
+				(sib_hash, node_hash)
+			};
+			let parent = crate::hash::hash_vc_node(&l, &r);
+			next.insert(i >> 1, parent);
+		}
+		nodes = next;
+	}
+
+	if proof_iter.next().is_some() {
+		return false; // proof had extra siblings
+	}
+	nodes.len() == 1 && nodes.values().next().copied() == Some(root)
 }
 
 #[cfg(test)]
@@ -111,30 +194,97 @@ mod tests {
 	}
 
 	#[test]
-	fn build_and_verify_path() {
-		let hashes = fake_hashes(1024);
-		let tree = MerkleTree::build_from_hashes(hashes.clone());
-		let root = tree.root();
-		for (i, leaf) in hashes.iter().enumerate() {
-			let path = tree.path(i);
-			assert!(verify_path(root, i, *leaf, &path), "index {i}");
-		}
-	}
-
-	#[test]
-	fn tampering_rejected() {
-		let hashes = fake_hashes(64);
-		let tree = MerkleTree::build_from_hashes(hashes.clone());
-		let root = tree.root();
-		let mut path = tree.path(7);
-		path[0][0] ^= 1;
-		assert!(!verify_path(root, 7, hashes[7], &path));
-	}
-
-	#[test]
 	fn pads_to_power_of_two() {
 		let hashes = fake_hashes(13);
 		let tree = MerkleTree::build_from_hashes(hashes);
 		assert_eq!(tree.layers.len(), 5);
+	}
+
+	#[test]
+	fn multiproof_round_trip() {
+		let n = 64;
+		let hashes = fake_hashes(n);
+		let tree = MerkleTree::build_from_hashes(hashes.clone());
+		let root = tree.root();
+		// Spot-check pattern: every other index, a contiguous block, scattered.
+		let probes: &[&[usize]] = &[
+			&[0, 1, 2, 3, 4, 5, 6, 7],
+			&[0, 8, 16, 24, 32, 40, 48, 56],
+			&[3, 7, 11, 15, 19, 23, 27, 31],
+			&[0, 1],
+			&[0, 63],
+		];
+		for indices in probes {
+			let mut sorted: Vec<usize> = indices.to_vec();
+			sorted.sort_unstable();
+			sorted.dedup();
+			let proof = tree.multiproof(&sorted);
+			let leaf_hashes: Vec<[u8; 32]> = sorted.iter().map(|&i| hashes[i]).collect();
+			let expected_size = multiproof_size(&sorted, tree.layers.len() - 1);
+			assert_eq!(
+				proof.len(),
+				expected_size,
+				"multiproof size mismatch for {indices:?}"
+			);
+			assert!(
+				verify_multiproof(root, n, &sorted, &leaf_hashes, &proof),
+				"multiproof verify failed for {indices:?}"
+			);
+		}
+	}
+
+	#[test]
+	fn multiproof_dense_query_set_emits_no_siblings() {
+		// All leaves queried → proof must be empty (verifier can rebuild the
+		// tree purely from the leaf hashes).
+		let n = 64;
+		let hashes = fake_hashes(n);
+		let tree = MerkleTree::build_from_hashes(hashes.clone());
+		let root = tree.root();
+		let indices: Vec<usize> = (0..n).collect();
+		let proof = tree.multiproof(&indices);
+		assert!(
+			proof.is_empty(),
+			"full-query multiproof should be empty, got {} hashes",
+			proof.len()
+		);
+		assert!(verify_multiproof(root, n, &indices, &hashes, &proof));
+	}
+
+	#[test]
+	fn multiproof_tampering_rejected() {
+		let n = 64;
+		let hashes = fake_hashes(n);
+		let tree = MerkleTree::build_from_hashes(hashes.clone());
+		let root = tree.root();
+		let indices: Vec<usize> = vec![3, 17, 42, 50];
+		let proof = tree.multiproof(&indices);
+		let mut leaf_hashes: Vec<[u8; 32]> = indices.iter().map(|&i| hashes[i]).collect();
+		leaf_hashes[0][0] ^= 1; // tamper a leaf
+		assert!(!verify_multiproof(root, n, &indices, &leaf_hashes, &proof));
+	}
+
+	#[test]
+	fn multiproof_savings_match_formula() {
+		// At q queries in a tree of depth d, BCS pruning emits approximately
+		// q · (d − log₂ q + 1) siblings, vs q · d for the naive concat.
+		let n = 1024; // depth = 10
+		let hashes = fake_hashes(n);
+		let tree = MerkleTree::build_from_hashes(hashes.clone());
+		let depth = tree.layers.len() - 1;
+		assert_eq!(depth, 10);
+
+		// q = 8: expect ~ 8 · (10 - 3 + 1) = 64 emitted, vs naive 80.
+		let mut indices: Vec<usize> = vec![3, 17, 42, 50, 99, 200, 500, 900];
+		indices.sort_unstable();
+		let proof = tree.multiproof(&indices);
+		// Be permissive — concrete count depends on collisions, but it must
+		// be strictly less than the naive q · d = 80.
+		assert!(
+			proof.len() < indices.len() * depth,
+			"pruned proof {} must be smaller than naive {}",
+			proof.len(),
+			indices.len() * depth
+		);
 	}
 }

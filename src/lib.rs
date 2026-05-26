@@ -32,7 +32,8 @@
 //! - **Post-quantum.** All primitives (Poseidon2, SHAKE256, WHIR) are
 //!   plausibly post-quantum at 128-bit classical security (≥ 85 bits quantum
 //!   at the recommended capacity; raise capacity for 128-bit quantum).
-//! - **Compact public keys** (~68 B) and **moderate signatures** (~45–70 KB).
+//! - **Compact public keys** (68 B) and **moderate signatures** (~94 KB
+//!   at n*=1 up to a few hundred KB across the deployable range).
 //!
 //! ## Quick start
 //!
@@ -60,13 +61,18 @@
 //! this set the cliff fires precisely at signature `n_star + 1`. See
 //! [`Params`] for the full parameter derivation.
 //!
-//! Reference sizes at the recommended `K = 16` positions-per-signature:
+//! Reference sizes at the recommended `K = 16` positions-per-signature,
+//! measured post-size-optimisation on Apple-Silicon-class hardware:
 //!
-//! | `n_star` | `M`      | `T`      | KeyGen | Sig    |
-//! |---------:|---------:|---------:|-------:|-------:|
-//! |    127   | 2¹¹      | 2²⁷      | 0.2 s  | 45 KB  |
-//! |   1023   | 2¹⁴      | 2³⁰      | 2 s    | 55 KB  |
-//! | 16,383   | 2¹⁸      | 2³⁴      | 60 s   | 70 KB  |
+//! | `n_star` | `M`      | `T`      | KeyGen | Sign   | Verify | Sig     |
+//! |---------:|---------:|---------:|-------:|-------:|-------:|--------:|
+//! |    127   | 2¹¹      | 2²⁷      | 0.4 s  | 0.22 s | 0.10 s | 333 KB  |
+//! |   1023   | 2¹⁴      | 2³⁰      | 3.1 s  | 1.3 s  | 0.7 s  | 428 KB  |
+//!
+//! The deployable range extends up to `n*=16,383` (the working field's
+//! 2-adicity ceiling) but the cached-initial-Merkle-tree footprint
+//! scales as ~`N` Goldilocks elements — at the ceiling this stresses
+//! consumer-class memory budgets.
 //!
 //! ## Construction (one paragraph)
 //!

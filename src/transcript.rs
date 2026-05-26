@@ -7,7 +7,7 @@
 //! incompatibility.
 
 use crate::field::Goldilocks4;
-use crate::hash::{Family, JV_FSCH, JV_OPEN, hash};
+use crate::hash::{JV_FSCH, JV_OPEN, hash};
 use crate::params::Params;
 
 /// Construct the deterministic prefix bytes injected into the spongefish
@@ -71,11 +71,11 @@ pub(crate) fn derive_betas(root: &[u8; 32], msg: &[u8], ys: &[Goldilocks4]) -> V
 	loop {
 		let tag = refill_tag.to_le_bytes();
 		let stream = if refill_tag == 0 {
-			hash(Family::Xof, JV_FSCH, &inputs, buffer_size)
+			hash(JV_FSCH, &inputs, buffer_size)
 		} else {
 			let mut alt = inputs.clone();
 			alt.push(&tag);
-			hash(Family::Xof, JV_FSCH, &alt, buffer_size)
+			hash(JV_FSCH, &alt, buffer_size)
 		};
 
 		let mut betas = Vec::with_capacity(want);

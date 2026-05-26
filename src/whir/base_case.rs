@@ -97,9 +97,9 @@ impl BaseCase {
 		let g_msg = derive_field_vec(mask_seed, b"base_case::g_msg", input_msg_len);
 		let g_code = ReedSolomon::<Goldilocks4>::new(input_msg_len);
 		let g_codeword = g_code.encode(&g_msg);
-		let g_leaves: Vec<Vec<Goldilocks4>> = g_codeword.iter().map(|&x| vec![x]).collect();
-		let g_vc = MerkleVc::new(g_codeword.len());
-		let (g_root, g_vc_state) = g_vc.commit(&g_leaves);
+		let g_slab = super::code::CodewordSlab::new(g_codeword, 1);
+		let g_vc = MerkleVc::new(g_slab.positions());
+		let (g_root, g_vc_state) = g_vc.commit_slab(g_slab);
 		transcript.prover_message(&g_root);
 
 		// 2. Per mask in stack: commit s_i_bc (fresh C_zk mask) and its root.
@@ -111,10 +111,9 @@ impl BaseCase {
 			let s_bc_msg = derive_field_vec_indexed(mask_seed, b"bc::s_msg", i, l_zk_inner);
 			let s_bc_r = derive_field_vec_indexed(mask_seed, b"bc::s_r", i, t_zk);
 			let s_bc_codeword = zk_enc.encode_with(&s_bc_msg, &s_bc_r);
-			let s_bc_leaves: Vec<Vec<Goldilocks4>> =
-				s_bc_codeword.iter().map(|&x| vec![x]).collect();
-			let s_bc_vc = MerkleVc::new(s_bc_codeword.len());
-			let (s_bc_root, s_bc_vc_state) = s_bc_vc.commit(&s_bc_leaves);
+			let s_bc_slab = super::code::CodewordSlab::new(s_bc_codeword, 1);
+			let s_bc_vc = MerkleVc::new(s_bc_slab.positions());
+			let (s_bc_root, s_bc_vc_state) = s_bc_vc.commit_slab(s_bc_slab);
 			transcript.prover_message(&s_bc_root);
 			s_bc_states.push(SOracleProverState {
 				msg: s_bc_msg,
@@ -280,8 +279,15 @@ where
 		.next_power_of_two()
 		.trailing_zeros() as usize;
 	const INTERLEAVING: usize = 4;
-	let input_opening = read_opening(transcript, queries, INTERLEAVING, queries * path_len)?;
-	let g_opening = read_opening(transcript, queries, G_LEAF_WIDTH, queries * path_len)?;
+	// BCS multiproof bytes count from sorted-unique positions (shared by
+	// the main code's input opening and the g mask opening — both indexed
+	// by the same `positions`).
+	let mut main_sorted_unique = positions.clone();
+	main_sorted_unique.sort_unstable();
+	main_sorted_unique.dedup();
+	let main_multiproof_bytes = crate::merkle::multiproof_size(&main_sorted_unique, path_len);
+	let input_opening = read_opening(transcript, queries, INTERLEAVING, main_multiproof_bytes)?;
+	let g_opening = read_opening(transcript, queries, G_LEAF_WIDTH, main_multiproof_bytes)?;
 
 	let input_folded_values = folded_commitment.verify_openings(&positions, &input_opening)?;
 	let g_vc = MerkleVc::new(folded_commitment.codeword_len());
@@ -311,16 +317,28 @@ where
 		let mask_positions =
 			sample_positions_verifier(transcript, mask_queries, zk_enc.codeword_len);
 
+		// BCS multiproof bytes for the shared mask spotcheck positions.
+		// All per-mask trees in the stack share the same codeword length
+		// (m_zk) and therefore the same path depth, so a single size suffices.
+		let mut mask_sorted_unique = mask_positions.clone();
+		mask_sorted_unique.sort_unstable();
+		mask_sorted_unique.dedup();
+		let s_bc_multiproof_bytes =
+			crate::merkle::multiproof_size(&mask_sorted_unique, mask_path_len);
+
 		for (((s_bc_root, mask), xi_star_msg), xi_star_r) in s_bc_roots
 			.iter()
 			.zip(mask_stack_view)
 			.zip(&xi_star_msgs)
 			.zip(&xi_star_rs)
 		{
-			let mask_opening =
-				read_opening(transcript, mask_queries, 1, mask_queries * mask.path_len())?;
-			let s_bc_opening =
-				read_opening(transcript, mask_queries, 1, mask_queries * mask_path_len)?;
+			// Carry-in mask oracle's tree depth equals mask.path_len() (which
+			// equals mask_path_len for C_zk-shape oracles — that's the only
+			// oracle shape in the stack at base case).
+			let mask_multiproof_bytes =
+				crate::merkle::multiproof_size(&mask_sorted_unique, mask.path_len());
+			let mask_opening = read_opening(transcript, mask_queries, 1, mask_multiproof_bytes)?;
+			let s_bc_opening = read_opening(transcript, mask_queries, 1, s_bc_multiproof_bytes)?;
 
 			let carry_values = mask.verify_openings(&mask_positions, &mask_opening)?;
 			let s_bc_vc = MerkleVc::new(zk_enc.codeword_len);
@@ -375,7 +393,7 @@ pub(crate) fn derive_field_vec(
 	purpose: &[u8],
 	count: usize,
 ) -> Vec<Goldilocks4> {
-	use crate::hash::{Family, JV_OPRD, hash};
+	use crate::hash::{JV_OPRD, hash};
 	if count == 0 {
 		return Vec::new();
 	}
@@ -384,14 +402,9 @@ pub(crate) fn derive_field_vec(
 	loop {
 		let extra = refill.to_le_bytes();
 		let stream = if refill == 0 {
-			hash(Family::Xof, JV_OPRD, &[mask_seed, purpose], buffer_size)
+			hash(JV_OPRD, &[mask_seed, purpose], buffer_size)
 		} else {
-			hash(
-				Family::Xof,
-				JV_OPRD,
-				&[mask_seed, purpose, &extra],
-				buffer_size,
-			)
+			hash(JV_OPRD, &[mask_seed, purpose, &extra], buffer_size)
 		};
 		let mut out = Vec::with_capacity(count);
 		let mut cursor = 0;

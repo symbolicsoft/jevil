@@ -41,24 +41,27 @@ impl<EC, VC> CodeCommitment<EC, VC> {
 	}
 }
 
-impl<EC, VC> CodeCommitment<EC, VC>
-where
-	EC: AdditiveCode,
-	VC: VectorCommitment<Alphabet = EC::OutputAlphabet>,
+impl
+	CodeCommitment<
+		super::code::InterleavedCode<super::code::ReedSolomon<crate::field::Goldilocks4>>,
+		super::vc::MerkleVc,
+	>
 {
-	/// Commit to `msg` via `code.encode` then `vc.commit`, writing the
-	/// resulting commitment digest into the Fiat–Shamir transcript.
+	/// Commit to `msg` via `code.encode_slab` then `vc.commit_slab`,
+	/// writing the resulting commitment digest into the Fiat–Shamir
+	/// transcript. Bytes-equivalent to the generic `commit` path but
+	/// avoids the `Vec<Vec<Goldilocks4>>` allocator storm.
 	pub(crate) fn commit(
 		&self,
 		transcript: &mut ProverState,
-		msg: Vec<EC::InputAlphabet>,
-	) -> CodeCommitmentProverState<EC, VC> {
+		msg: Vec<crate::field::Goldilocks4>,
+	) -> CodeCommitmentProverState<
+		super::code::InterleavedCode<super::code::ReedSolomon<crate::field::Goldilocks4>>,
+		super::vc::MerkleVc,
+	> {
 		assert_eq!(msg.len(), self.code.msg_len());
-
-		let encoding = self.code.encode(&msg);
-		assert_eq!(encoding.len(), self.code.codeword_len());
-
-		let (commitment, vc_state) = self.vc.commit(&encoding);
+		let slab = self.code.encode_slab(&msg);
+		let (commitment, vc_state) = self.vc.commit_slab(slab);
 		transcript.prover_message(&commitment);
 
 		CodeCommitmentProverState {
@@ -66,6 +69,7 @@ where
 			vc: self.vc.clone(),
 			msg,
 			vc_state,
+			vc_root: commitment,
 		}
 	}
 
@@ -74,19 +78,39 @@ where
 	/// for the public key independently of any signature transcript.
 	pub(crate) fn commit_only(
 		&self,
-		msg: Vec<EC::InputAlphabet>,
-	) -> (VC::Commitment, CodeCommitmentProverState<EC, VC>) {
+		msg: Vec<crate::field::Goldilocks4>,
+	) -> (
+		[u8; 32],
+		CodeCommitmentProverState<
+			super::code::InterleavedCode<super::code::ReedSolomon<crate::field::Goldilocks4>>,
+			super::vc::MerkleVc,
+		>,
+	) {
 		assert_eq!(msg.len(), self.code.msg_len());
-		let encoding = self.code.encode(&msg);
-		assert_eq!(encoding.len(), self.code.codeword_len());
-		let (commitment, vc_state) = self.vc.commit(&encoding);
+		let slab = self.code.encode_slab(&msg);
+		let (commitment, vc_state) = self.vc.commit_slab(slab);
 		let state = CodeCommitmentProverState {
 			code: self.code.clone(),
 			vc: self.vc.clone(),
 			msg,
 			vc_state,
+			vc_root: commitment,
 		};
 		(commitment, state)
+	}
+}
+
+impl<EC, VC> CodeCommitmentProverState<EC, VC>
+where
+	EC: AdditiveCode,
+	VC: VectorCommitment<Alphabet = EC::OutputAlphabet>,
+	VC::Commitment: spongefish::Encoding,
+{
+	/// Write the cached commitment digest into a Fiat–Shamir transcript
+	/// without rebuilding the codeword or Merkle tree. Used by the
+	/// cached-initial-state path in `sign`.
+	pub(crate) fn write_root_to(&self, transcript: &mut ProverState) {
+		transcript.prover_message(&self.vc_root);
 	}
 }
 
@@ -104,6 +128,29 @@ where
 	pub(crate) vc: Arc<VC>,
 	pub(crate) msg: Vec<EC::InputAlphabet>,
 	pub(crate) vc_state: VC::CommitState,
+	/// The commitment digest produced alongside `vc_state`. Cached here
+	/// so that callers (e.g. the cached-initial-state path in `sign`)
+	/// can write the root to a transcript without rebuilding the tree.
+	pub(crate) vc_root: VC::Commitment,
+}
+
+impl<EC, VC> Clone for CodeCommitmentProverState<EC, VC>
+where
+	EC: AdditiveCode,
+	EC::InputAlphabet: Clone,
+	VC: VectorCommitment,
+	VC::CommitState: Clone,
+	VC::Commitment: Clone,
+{
+	fn clone(&self) -> Self {
+		Self {
+			code: self.code.clone(),
+			vc: self.vc.clone(),
+			msg: self.msg.clone(),
+			vc_state: self.vc_state.clone(),
+			vc_root: self.vc_root.clone(),
+		}
+	}
 }
 
 /// Prover-side state after sumcheck folding has reduced the inner message.

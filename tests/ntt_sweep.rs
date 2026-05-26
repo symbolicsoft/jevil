@@ -51,7 +51,7 @@ fn ntt_sweep_correctness_via_horner() {
 			for (i, &out_i) in actual.iter().enumerate() {
 				let expected = horner(&coeffs, x);
 				assert_eq!(out_i, expected, "log_n={log_n} i={i}");
-				x = x * g;
+				x *= g;
 			}
 		} else {
 			// Spot-check 8 random output positions. At log_n=18 the

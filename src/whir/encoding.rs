@@ -31,19 +31,31 @@ pub(crate) struct ZkEncoding {
 }
 
 impl ZkEncoding {
-	/// Construct a ZK encoding. Panics unless `msg_len + rand_len` is a power
-	/// of two (required by the underlying NTT).
-	pub(crate) fn new(msg_len: usize, rand_len: usize) -> Self {
+	/// Construct a ZK encoding at rate `1 / rate_inv`. Panics unless
+	/// `msg_len + rand_len` is a power of two (required by the underlying NTT)
+	/// and `rate_inv` is a power of two (so the codeword length stays
+	/// NTT-friendly).
+	pub(crate) fn new_at_rate(msg_len: usize, rand_len: usize, rate_inv: usize) -> Self {
 		let total = msg_len + rand_len;
 		assert!(
 			total.is_power_of_two(),
-			"ZkEncoding::new: msg_len + rand_len must be a power of two, got {total}"
+			"ZkEncoding::new_at_rate: msg_len + rand_len must be a power of two, got {total}"
+		);
+		assert!(
+			rate_inv.is_power_of_two(),
+			"ZkEncoding::new_at_rate: rate_inv must be a power of two, got {rate_inv}"
 		);
 		Self {
 			msg_len,
 			rand_len,
-			codeword_len: total * 4,
+			codeword_len: total * rate_inv,
 		}
+	}
+
+	/// Construct a ZK encoding at the C_zk rate (`ρ_zk = 1/16` per paper
+	/// §3.5). Equivalent to `new_at_rate(msg_len, rand_len, Params::RATE_INV_ZK)`.
+	pub(crate) fn new(msg_len: usize, rand_len: usize) -> Self {
+		Self::new_at_rate(msg_len, rand_len, crate::params::Params::RATE_INV_ZK)
 	}
 
 	/// Encode with caller-supplied randomness. Used by [`crate::keygen`]

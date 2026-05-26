@@ -296,9 +296,9 @@ pub(crate) fn prove_sumcheck_zk(
 		r_salt.extend_from_slice(&(j as u64).to_le_bytes());
 		let s_j_r = super::base_case::derive_field_vec(mask_seed, &r_salt, t_zk);
 		let s_j_codeword = zk_enc.encode_with(&s_j_msg, &s_j_r);
-		let s_j_leaves: Vec<Vec<Goldilocks4>> = s_j_codeword.iter().map(|&x| vec![x]).collect();
-		let s_j_vc = MerkleVc::new(s_j_codeword.len());
-		let (s_j_root, s_j_state) = s_j_vc.commit(&s_j_leaves);
+		let s_j_slab = super::code::CodewordSlab::new(s_j_codeword, 1);
+		let s_j_vc = MerkleVc::new(s_j_slab.positions());
+		let (s_j_root, s_j_state) = s_j_vc.commit_slab(s_j_slab);
 		transcript.prover_message(&s_j_root);
 		mask_polys.push(s_j_poly);
 		mask_handles.push(MaskOracleHandle::new_prover(

@@ -32,9 +32,9 @@ exactly for every deployment.
 
 | | |
 | --- | --- |
-| **Public key** | ~36 bytes |
+| **Public key** | 68 bytes |
 | **Secret key** | 32 bytes |
-| **Signature** | ~30–50 KB |
+| **Signature** | ~94 KB (n*=1) to ~430 KB (n*=1023) |
 | **Classical security** | ≥ 128 bits below the cliff |
 | **Quantum security** | ≥ 85 bits at default capacity, raise to 128 bits with `c = 6` |
 

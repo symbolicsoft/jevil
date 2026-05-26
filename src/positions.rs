@@ -12,7 +12,7 @@
 
 use std::collections::HashMap;
 
-use crate::hash::{Family, JV_POSN, hash};
+use crate::hash::{JV_POSN, hash};
 
 /// Derive `K` distinct ascending position indices in `[0, T)` from `(root,
 /// msg)` via the partial Fisher–Yates procedure of paper §4.4.
@@ -28,7 +28,7 @@ pub(crate) fn derive_positions(root: &[u8; 32], msg: &[u8], k: usize, t: usize) 
 	let b = log_t_bits.div_ceil(8);
 
 	let initial_bytes = 32 + k * b * 4;
-	let mut stream = hash(Family::Xof, JV_POSN, &[root, msg], initial_bytes);
+	let mut stream = hash(JV_POSN, &[root, msg], initial_bytes);
 	let mut cursor = 0usize;
 	let mut refill_id = 0u64;
 
@@ -52,7 +52,7 @@ pub(crate) fn derive_positions(root: &[u8; 32], msg: &[u8], k: usize, t: usize) 
 			if cursor + b > stream.len() {
 				refill_id += 1;
 				let tag = refill_id.to_le_bytes();
-				stream = hash(Family::Xof, JV_POSN, &[root, msg, &tag], initial_bytes);
+				stream = hash(JV_POSN, &[root, msg, &tag], initial_bytes);
 				cursor = 0;
 			}
 			let mut buf = [0u8; 16];
