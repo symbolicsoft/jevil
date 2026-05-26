@@ -393,34 +393,7 @@ pub(crate) fn derive_field_vec(
 	purpose: &[u8],
 	count: usize,
 ) -> Vec<Goldilocks4> {
-	use crate::hash::{JV_OPRD, hash};
-	if count == 0 {
-		return Vec::new();
-	}
-	let mut buffer_size = count * 32 * 2 + 32;
-	let mut refill = 0u64;
-	loop {
-		let extra = refill.to_le_bytes();
-		let stream = if refill == 0 {
-			hash(JV_OPRD, &[mask_seed, purpose], buffer_size)
-		} else {
-			hash(JV_OPRD, &[mask_seed, purpose, &extra], buffer_size)
-		};
-		let mut out = Vec::with_capacity(count);
-		let mut cursor = 0;
-		while out.len() < count && cursor + 32 <= stream.len() {
-			let chunk = &stream[cursor..cursor + 32];
-			cursor += 32;
-			if let Some(g) = Goldilocks4::from_bytes(chunk) {
-				out.push(g);
-			}
-		}
-		if out.len() == count {
-			return out;
-		}
-		buffer_size *= 2;
-		refill += 1;
-	}
+	crate::hash::shake_field_elements(crate::hash::JV_OPRD, &[mask_seed, purpose], count)
 }
 
 /// Derive `count` `Goldilocks4` elements deterministically from

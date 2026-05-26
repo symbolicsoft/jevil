@@ -12,14 +12,18 @@
 
 use std::collections::HashMap;
 
-use crate::hash::{JV_POSN, hash};
+use shake::XofReader;
+
+use crate::hash::{JV_POSN, shake256_xof};
 
 /// Derive `K` distinct ascending position indices in `[0, T)` from `(root,
 /// msg)` via the partial Fisher–Yates procedure of paper §4.4.
 ///
 /// `b = ⌈log₂(T) / 8⌉` bytes per draw. Unbiased rejection sampling: any raw
 /// value `≥ floor(2^(8b) / m) · m` (where `m = pool_size` at that step) is
-/// rejected, so `val mod m` is uniform on `[0, m)`.
+/// rejected, so `val mod m` is uniform on `[0, m)`. Bytes come from a single
+/// continuous SHAKE256 XOF stream (matches spec §4.4's "from H_xof(JV-POSN,
+/// root, msg; ∞)" literally).
 pub(crate) fn derive_positions(root: &[u8; 32], msg: &[u8], k: usize, t: usize) -> Vec<usize> {
 	assert!(k > 0 && k <= t, "k={k} t={t}");
 	assert!(t.is_power_of_two(), "t={t} must be a power of two");
@@ -27,10 +31,7 @@ pub(crate) fn derive_positions(root: &[u8; 32], msg: &[u8], k: usize, t: usize) 
 	let log_t_bits = t.trailing_zeros() as usize;
 	let b = log_t_bits.div_ceil(8);
 
-	let initial_bytes = 32 + k * b * 4;
-	let mut stream = hash(JV_POSN, &[root, msg], initial_bytes);
-	let mut cursor = 0usize;
-	let mut refill_id = 0u64;
+	let mut reader = shake256_xof(JV_POSN, &[root, msg]);
 
 	// `overlay[j] = v` means `A[j] = v` (others are the identity).
 	let mut overlay: HashMap<usize, usize> = HashMap::with_capacity(2 * k);
@@ -49,15 +50,8 @@ pub(crate) fn derive_positions(root: &[u8; 32], msg: &[u8], k: usize, t: usize) 
 		};
 
 		let j_raw = loop {
-			if cursor + b > stream.len() {
-				refill_id += 1;
-				let tag = refill_id.to_le_bytes();
-				stream = hash(JV_POSN, &[root, msg, &tag], initial_bytes);
-				cursor = 0;
-			}
 			let mut buf = [0u8; 16];
-			buf[..b].copy_from_slice(&stream[cursor..cursor + b]);
-			cursor += b;
+			reader.read(&mut buf[..b]);
 			let raw = u128::from_le_bytes(buf) & mask;
 			if raw < cutoff {
 				break (raw % m as u128) as usize;

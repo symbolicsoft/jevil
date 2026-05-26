@@ -33,6 +33,6 @@ fn kat_n_star_3() {
 	);
 	assert_eq!(
 		sig_hash,
-		"719ddd4e85d5949e4bcf20d2bc38d71df89d89b8faf59956a392e7b8e602a7d9"
+		"1ae20cc295704b3c9edddab5d56d56fe9baa58a35757e2b0556ad42f88ab06f5"
 	);
 }

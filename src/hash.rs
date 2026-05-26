@@ -120,30 +120,55 @@ fn h_vc_ivs() -> &'static ([Goldilocks; 4], [Goldilocks; 4]) {
 /// canonical 8-byte domain `tag` and the length-prefix framing described
 /// in the module docs. Returns exactly `out_len` output bytes.
 pub(crate) fn hash(tag: [u8; 8], inputs: &[&[u8]], out_len: usize) -> Vec<u8> {
-	let total = 8 + inputs.iter().map(|x| 8 + x.len()).sum::<usize>();
-	let mut buf = Vec::with_capacity(total);
-
-	buf.extend_from_slice(&tag);
-	for input in inputs {
-		buf.extend_from_slice(&(input.len() as u64).to_le_bytes());
-		buf.extend_from_slice(input);
-	}
-
-	shake256_hash(&buf, out_len)
-}
-
-// ---------------------------------------------------------------------------
-// SHAKE256
-// ---------------------------------------------------------------------------
-
-/// SHAKE256 of `input`, squeezing `out_len` bytes.
-fn shake256_hash(input: &[u8], out_len: usize) -> Vec<u8> {
-	let mut hasher = Shake256::default();
-	hasher.update(input);
-	let mut reader = hasher.finalize_xof();
+	let mut reader = shake256_xof(tag, inputs);
 	let mut out = vec![0u8; out_len];
 	reader.read(&mut out);
 	out
+}
+
+/// Pull `count` uniform `Goldilocks4` elements from the SHAKE256 XOF
+/// stream `SHAKE256(tag ‖ len_8(x_1) ‖ x_1 ‖ … )` with per-limb rejection
+/// sampling. Realises paper §3.2/§4.1 step 2's "from H_xof(tag, …; ∞)"
+/// language literally: a single open-ended SHAKE squeeze fed by the
+/// canonical framing, with 32-byte chunks parsed as four little-endian
+/// Goldilocks limbs and rejected if any limb is `≥ q_0`.
+pub(crate) fn shake_field_elements(
+	tag: [u8; 8],
+	inputs: &[&[u8]],
+	count: usize,
+) -> Vec<crate::field::Goldilocks4> {
+	if count == 0 {
+		return Vec::new();
+	}
+	let mut reader = shake256_xof(tag, inputs);
+	let mut out = Vec::with_capacity(count);
+	let mut chunk = [0u8; 32];
+	while out.len() < count {
+		reader.read(&mut chunk);
+		if let Some(g) = crate::field::Goldilocks4::from_bytes(&chunk) {
+			out.push(g);
+		}
+	}
+	out
+}
+
+/// Initialise a SHAKE256 XOF reader over `tag ‖ len_8(x_1) ‖ x_1 ‖ …`.
+/// The caller can squeeze any number of bytes; the framing matches
+/// [`hash`] exactly so single-shot and streamed callers agree on the
+/// first N bytes for every N.
+///
+/// The `use<>` capture clause is explicit: the returned reader owns its
+/// state and does NOT borrow from `inputs`, so callers can pass
+/// short-lived `&[&[u8]]` slices like `&[root, msg]` without lifetime
+/// gymnastics.
+pub(crate) fn shake256_xof(tag: [u8; 8], inputs: &[&[u8]]) -> impl XofReader + use<> {
+	let mut hasher = Shake256::default();
+	hasher.update(&tag);
+	for input in inputs {
+		hasher.update(&(input.len() as u64).to_le_bytes());
+		hasher.update(input);
+	}
+	hasher.finalize_xof()
 }
 
 // ---------------------------------------------------------------------------

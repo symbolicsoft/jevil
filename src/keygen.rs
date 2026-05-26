@@ -3,7 +3,7 @@
 use rand::{CryptoRng, RngCore};
 
 use crate::field::Goldilocks4;
-use crate::hash::{JV_OOD, JV_SEED, hash};
+use crate::hash::{JV_OOD, JV_SEED};
 use crate::params::Params;
 use crate::whir::{ConcreteWhirProtocol, WhirSignerState};
 use crate::{PublicKey, SecretKey};
@@ -130,33 +130,7 @@ pub(crate) fn build_whir_protocol(params: Params) -> ConcreteWhirProtocol {
 /// expand the secret seed into coefficients, and with `tag = JV-OOD` to
 /// derive the OOD binding point `z` from a commitment root.
 fn derive_field_elements(input: &[u8; 32], tag: [u8; 8], count: usize) -> Vec<Goldilocks4> {
-	if count == 0 {
-		return Vec::new();
-	}
-	let mut buffer_size = count * 32 * 2 + 32;
-	let mut refill_tag = 0u64;
-	loop {
-		let extra = refill_tag.to_le_bytes();
-		let stream = if refill_tag == 0 {
-			hash(tag, &[input], buffer_size)
-		} else {
-			hash(tag, &[input, &extra], buffer_size)
-		};
-		let mut out = Vec::with_capacity(count);
-		let mut cursor = 0usize;
-		while out.len() < count && cursor + 32 <= stream.len() {
-			let chunk = &stream[cursor..cursor + 32];
-			cursor += 32;
-			if let Some(g) = Goldilocks4::from_bytes(chunk) {
-				out.push(g);
-			}
-		}
-		if out.len() == count {
-			return out;
-		}
-		buffer_size *= 2;
-		refill_tag += 1;
-	}
+	crate::hash::shake_field_elements(tag, &[input], count)
 }
 
 #[cfg(test)]

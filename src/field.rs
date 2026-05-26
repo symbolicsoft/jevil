@@ -348,18 +348,31 @@ impl Encoding<[u8]> for Goldilocks4 {
 }
 
 impl Decoding<[u8]> for Goldilocks4 {
-	type Repr = ByteArray<32>;
+	type Repr = ByteArray<64>;
 
+	/// Squeeze 64 bytes from the Fiat–Shamir sponge per `F_{q₀⁴}` challenge:
+	/// 16 bytes per base-field limb, interpreted as a little-endian `u128`
+	/// and reduced mod `q₀`. The reduction is statistically uniform on
+	/// `[0, q₀)` up to bias `≤ q₀ / 2¹²⁸ ≈ 2⁻⁶⁴` per limb (`≤ 2⁻⁶²` per
+	/// `F`-element), well below the soundness target.
+	///
+	/// **Why 64 bytes, not 32 with `raw < q₀ ? raw : raw - q₀`?** The shorter
+	/// path is a single-subtraction modular reduction on a 64-bit raw input,
+	/// which biases values in `[0, 2⁶⁴ - q₀) = [0, 2³² - 1)` by a factor of
+	/// 2 over the rest of the field — TV distance `≈ 2⁻³²` per limb. That
+	/// margin is fine for honest random oracle outputs but the spec wants
+	/// uniform-on-F challenges, and a malicious grinder could in principle
+	/// amplify the bias. Doubling the per-element sponge squeeze removes
+	/// the bias entirely (modulo the negligible `≤ 2⁻⁶⁴` residue from
+	/// 128→64-bit reduction). Costs at most a few KB of sponge work per
+	/// signature; verifies the same on both sides because both squeeze 64.
 	fn decode(buf: Self::Repr) -> Self {
-		let bytes: &[u8; 32] = buf.as_ref();
+		let bytes: &[u8; 64] = buf.as_ref();
+		let q0_u128 = Q0 as u128;
 		let mut c = [Goldilocks::new(0); 4];
 		for i in 0..4 {
-			let raw = u64::from_le_bytes(bytes[i * 8..(i + 1) * 8].try_into().unwrap());
-			// Standard mod-q₀ reduction: since `2·q₀ > 2⁶⁴`, at most one
-			// subtraction suffices. The statistical distance from uniform on
-			// [0, q₀) is ≤ 2⁻³² — well below cryptographic concern for the
-			// O(few×100) challenges drawn per signature.
-			let val = if raw < Q0 { raw } else { raw - Q0 };
+			let raw = u128::from_le_bytes(bytes[i * 16..(i + 1) * 16].try_into().unwrap());
+			let val = (raw % q0_u128) as u64;
 			c[i] = Goldilocks::new(val);
 		}
 		Goldilocks4::new(c)

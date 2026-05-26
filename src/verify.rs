@@ -81,10 +81,14 @@ pub fn verify(pk: &PublicKey, params: Params, msg: &[u8], sig: &Signature) -> Re
 	//    happens inside `whir.verify`.
 	let alpha = BatchedAlpha::new(&xs, betas, params.nu());
 
-	// 5. Run WHIR's verifier on top.
+	// 5. Run WHIR's verifier on top, binding the opening to `pk.root`
+	//    (paper §2.3 Def. 7: WHIR.Verify takes `root` as a verifier input).
+	//    Without this binding, the WHIR layer would accept openings against
+	//    any prover-chosen commitment — letting an attacker forge with a
+	//    self-committed polynomial that only needs to satisfy f'(z) = pk.w.
 	let hvzk_budget = params.n() - params.m();
 	let whir = ConcreteWhirVerifier::build(params.m(), hvzk_budget, 64, 64);
-	whir.verify(&mut transcript, alpha, v)
+	whir.verify(&mut transcript, pk.root, alpha, v)
 		.map_err(|_| Error::VerificationFailed)?;
 	transcript
 		.check_eof()
@@ -129,5 +133,32 @@ mod tests {
 		let (pk, sk, cache) = keygen(&mut rng, params);
 		let sig = sign(&sk, &pk, &cache, params, b"a");
 		assert!(verify(&pk, params, b"b", &sig).is_err());
+	}
+
+	#[test]
+	fn forged_root_attack_now_rejected() {
+		use crate::SecretKey;
+		use crate::keygen::{
+			SignerCache, build_whir_protocol, derive_coefficient_vector, derive_ood_point, horner,
+		};
+		let params = Params::new(1);
+		let mut rng_target = ChaCha20Rng::seed_from_u64(100);
+		let (pk_target, _sk_target, _cache_target) = keygen(&mut rng_target, params);
+		let z = derive_ood_point(&pk_target.root);
+		let w_required = pk_target.w;
+		let sigma_atk = [0xAAu8; 32];
+		let mut c_atk = derive_coefficient_vector(&sigma_atk, params);
+		let cur = horner(&c_atk, z);
+		c_atk[0] += w_required - cur;
+		let whir = build_whir_protocol(params);
+		let (_root_atk, whir_state_atk) = whir.commit(&c_atk, &sigma_atk);
+		let cache_atk = SignerCache {
+			c: c_atk,
+			whir_state: whir_state_atk,
+		};
+		let sk_fake = SecretKey::from_bytes([0u8; 32]);
+		let sig = sign(&sk_fake, &pk_target, &cache_atk, params, b"forgery");
+		let result = verify(&pk_target, params, b"forgery", &sig);
+		assert_eq!(result, Err(Error::VerificationFailed));
 	}
 }

@@ -35,7 +35,7 @@
 
 use std::sync::Arc;
 
-use spongefish::{ProverState, VerificationResult, VerifierState};
+use spongefish::{ProverState, VerificationError, VerificationResult, VerifierState};
 
 use super::base_case::{BaseCase, verify_base_case};
 use super::code::{Field, InterleavedCode, ReedSolomon};
@@ -54,7 +54,7 @@ use super::transcript_io::{
 };
 use super::vc::MerkleVc;
 use crate::field::Goldilocks4;
-use crate::hash::{JV_RZK, hash};
+use crate::hash::JV_RZK;
 
 // ---------------------------------------------------------------------------
 // Constants matching the reference WHIR parameter set (paper §2.3)
@@ -562,9 +562,22 @@ impl ConcreteWhirVerifier {
 	/// [`LinearFormHandle`]; this routine wraps it in a
 	/// [`MessageEmbeddedHandle`] that exposes the length-`N` form the
 	/// inner sumcheck expects.
+	///
+	/// `expected_root` is the public-key commitment digest the caller wants
+	/// the proof to open against (paper §2.3 Def. 7: WHIR.Verify takes
+	/// `root` as an input). The first prover message of the WHIR proof
+	/// carries the commit root that was committed under at signing time;
+	/// we read it, absorb it into the Fiat–Shamir sponge (so the
+	/// downstream challenges depend on it), and only THEN compare it to
+	/// `expected_root`. Mismatch → `VerificationError`. Without this
+	/// check a malicious signer can commit to an arbitrary polynomial
+	/// f' (e.g., satisfying only f'(z) = pk.w) under a self-chosen root
+	/// and open it against the verifier, since the Merkle opening
+	/// verification at the base case uses the prover-supplied root.
 	pub(crate) fn verify<LFH>(
 		&self,
 		transcript: &mut VerifierState,
+		expected_root: [u8; 32],
 		alpha_handle: LFH,
 		value: Goldilocks4,
 	) -> VerificationResult<()>
@@ -580,10 +593,21 @@ impl ConcreteWhirVerifier {
 			nu_prime,
 		};
 
+		// Read the initial commitment root from the proof, absorb it into
+		// the FS sponge via `prover_message`, then bind it to the
+		// caller-supplied `expected_root`. The absorption must happen
+		// before the equality check so a rejected proof costs the
+		// adversary one extra sponge state advancement — not a security
+		// requirement but keeps the failure path indistinguishable to
+		// reduce reasoning about partial leakage.
+		let initial_commitment_root: [u8; 32] = transcript.prover_message()?;
+		if initial_commitment_root != expected_root {
+			return Err(VerificationError);
+		}
 		let initial_commitment = ExplicitCodeCommitmentHandle {
 			code: self.initial_commitment.code.clone(),
 			vc: self.initial_commitment.vc.clone(),
-			commitment: transcript.prover_message()?,
+			commitment: initial_commitment_root,
 		};
 
 		// Wrap embedded handle in FoldedFormHandle (scale=ONE, empty rand)
@@ -722,33 +746,7 @@ impl<F: Field> LinearFormHandle for MessageEmbeddedHandle<F> {
 /// Prop. 3.19 encoding randomness that [`ConcreteWhirProtocol::commit`]
 /// samples internally.
 fn derive_r_zk(sigma: &[u8; 32], count: usize) -> Vec<Goldilocks4> {
-	if count == 0 {
-		return Vec::new();
-	}
-	let mut buffer_size = count * 32 * 2 + 32;
-	let mut refill_tag = 0u64;
-	loop {
-		let extra = refill_tag.to_le_bytes();
-		let stream = if refill_tag == 0 {
-			hash(JV_RZK, &[sigma], buffer_size)
-		} else {
-			hash(JV_RZK, &[sigma, &extra], buffer_size)
-		};
-		let mut out = Vec::with_capacity(count);
-		let mut cursor = 0usize;
-		while out.len() < count && cursor + 32 <= stream.len() {
-			let chunk = &stream[cursor..cursor + 32];
-			cursor += 32;
-			if let Some(g) = Goldilocks4::from_bytes(chunk) {
-				out.push(g);
-			}
-		}
-		if out.len() == count {
-			return out;
-		}
-		buffer_size *= 2;
-		refill_tag += 1;
-	}
+	crate::hash::shake_field_elements(JV_RZK, &[sigma], count)
 }
 
 #[cfg(test)]

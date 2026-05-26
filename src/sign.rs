@@ -152,15 +152,38 @@ pub fn sign(
 /// `(sk_seed, root, msg, y_1, …, y_K)` per paper §2.2 / Construction 5
 /// step 6.
 ///
-/// The hash inputs match the spec literally: the seed `s`, root, message,
-/// and each revealed evaluation `y_t` are passed as **separate**
-/// length-prefixed inputs to the length-prefix framing of [`crate::hash`],
-/// so the framing is `tag ‖ len_8(s) ‖ s ‖ len_8(root) ‖ root ‖
-/// len_8(msg) ‖ msg ‖ len_8(y_1) ‖ y_1 ‖ … ‖ len_8(y_K) ‖ y_K`. This
-/// matches the spec's `H_xof(JV-OPRD, s, root, M, y_1, …, y_K; ∞)`
-/// exactly, except we truncate the XOF stream at 32 bytes and re-expand
-/// downstream via `derive_field_vec` (which is itself JV-OPRD-tagged) —
-/// security-equivalent in the random-oracle model.
+/// ## Spec interface vs. implementation chain
+///
+/// The spec describes `ρ` in two complementary ways:
+///
+/// - Construction 5 step 6: `ρ ← H_xof(JV-OPRD, s, root, M, y_1, …, y_K; ∞)`
+///   — an XOF stream parametrised by all the per-signature inputs.
+/// - Definition 7 (`WHIR.Open(st, α, v; ρ) → π`): "a 32-byte randomness
+///   seed `ρ`" that drives the prover-internal randomness.
+///
+/// The two are consistent in the random-oracle model: an XOF stream over
+/// `(JV-OPRD, …)` and a 32-byte seed thereof both produce the same per-
+/// purpose downstream randomness under further RO-modelled expansion.
+/// This function returns the 32-byte seed (Def. 7's interface);
+/// downstream consumers — sumcheck round-poly masks, code-switching
+/// padding masks, base-case mask companions — re-expand it per purpose
+/// via `derive_field_vec(seed, purpose, …)` which calls
+/// `H_xof(JV-OPRD, seed, purpose; ∞)`.
+///
+/// The chain is therefore:
+/// `ρ_seed = H_xof(JV-OPRD, s, root, msg, y_1…y_K; 32)`
+/// and `r_purpose = H_xof(JV-OPRD, ρ_seed, purpose; ∞)` per purpose.
+/// In the RO model this is statistically indistinguishable from squeezing
+/// a long stream from the original `H_xof(JV-OPRD, s, root, msg, ys; ∞)`
+/// and splitting it deterministically per purpose. Both signer and
+/// verifier never call this with the same `(s, root, msg, ys)` twice
+/// unless the message and revealed evaluations are byte-identical, so
+/// HVZK budget reuse across signatures cannot happen.
+///
+/// The hash inputs use the same length-prefixed framing as every other
+/// `H_xof` call: `JV-OPRD ‖ len_8(s) ‖ s ‖ len_8(root) ‖ root ‖
+/// len_8(msg) ‖ msg ‖ len_8(y_1) ‖ y_1 ‖ … ‖ len_8(y_K) ‖ y_K`. The seed
+/// `s` MUST remain secret; the rest is public.
 ///
 /// Deterministic — the same `(sk, pk, msg)` produces the same seed —
 /// but unique across messages and `y_t` tuples, which is what HVZK
