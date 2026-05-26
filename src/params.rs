@@ -125,21 +125,21 @@ impl Params {
 		self.n_star.to_le_bytes()
 	}
 
-	/// Worst-case F-linear functionals on the WHIR commit vector `m` that
+	/// Worst-case F-linear functionals on the WHIR commit vector `c` that
 	/// one signature transcript exposes — i.e. queries + OOD samples +
 	/// sumcheck round polynomials summed across all codeswitch rounds and
 	/// the final trivial step. The per-round contribution is bounded by
 	/// `θ + η = 66` functionals (`θ = 64` in-domain queries + `η = 2` OOD
 	/// samples per round), conservatively rounded to `θ_aux ≤ 70` to absorb
 	/// any per-implementation accounting variation. The codeswitch round
-	/// count is bounded by `R ≤ 10` for any deployable `n_star` (largest
-	/// `N ≤ 2^25` at `n* = 16,383`). The base-case term `Q_base ≤ 100`
+	/// count is bounded by `R ≤ 9` for any deployable `n_star` (largest
+	/// `N ≤ 2^24` at `n* = 16,383`). The base-case term `Q_base ≤ 100`
 	/// covers Construction 7.2: `θ = 64` in-domain spotchecks + `θ_mask = 32`
 	/// mask cross-checks + Merkle companions. The closed-form bound
-	/// `70·R + 100 ≤ 800` covers any deployable `n_star` (paper Eq. 9);
-	/// we adopt 832 with a small 32-functional headroom for accounting
-	/// variation. Dropping the prior next-pow-2 rounding to 1024 keeps
-	/// `nu_prime` one octave smaller at boundary `n_star` values.
+	/// `70·R + 100 ≤ 730` covers any deployable `n_star` (paper Eq. 9);
+	/// we adopt 832 with ≥ 102-functional headroom for accounting variation.
+	/// Dropping the prior next-pow-2 rounding to 1024 keeps `nu_prime` one
+	/// octave smaller at boundary `n_star` values.
 	pub const Q_MAX: u64 = 832;
 
 	/// `N = 2^ν'` — the WHIR primitive's internal ZK-encoded message
