@@ -22,8 +22,8 @@ use crate::{PublicKey, SecretKey};
 /// `c` is *secret* material, so on drop we zeroize the vector contents.
 /// The cached codeword is not strictly secret (public-derivable from
 /// `pk.root`) but lives on the same heap arenas; zeroized on drop for
-/// defense in depth. **Memory cost**: the cached codeword scales as
-/// ~4 N Goldilocks elements (~128 MB at n*=127, ~1 GB at n*=1023).
+/// defense in depth. **Memory cost**: the cached codeword scales linearly
+/// with `N` (`N` grows roughly as `n* · θ`).
 pub struct SignerCache {
 	pub(crate) c: Vec<Goldilocks4>,
 	pub(crate) whir_state: WhirSignerState,

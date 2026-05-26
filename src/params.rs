@@ -12,9 +12,11 @@
 /// The only field is the signing budget [`Params::n_star`]. All derived
 /// quantities (`M`, `T`, `ν`, `n_cliff`, the commit dimension `N`) are
 /// computed on demand by methods on `Params` from `n_star` and the global
-/// constant `K`. The commit dimension `N = nextpow2(M + n*·Q_max)` is the
-/// Prop. 3.19 ZK encoding randomness sizing that supports multi-opening
-/// HVZK across the full signing budget (paper Lemma 11).
+/// constant `K`. The commit dimension `N = nextpow2(M + n*·θ)` (with
+/// `θ = 64` the per-signature codeword-position query count of the WHIR
+/// HVZK simulator against `enc(c)`) sizes the Prop. 3.19 ZK encoding
+/// randomness to support multi-opening HVZK across the full signing
+/// budget (paper Lemma 11).
 ///
 /// **`n_star + 1` must be a power of two** — i.e. `n_star` must lie in the
 /// recommended set `{1, 3, 7, 15, 31, 63, 127, 255, 511, 1023, …}`. Within
@@ -125,34 +127,29 @@ impl Params {
 		self.n_star.to_le_bytes()
 	}
 
-	/// Worst-case F-linear functionals on the WHIR commit vector `c` that
-	/// one signature transcript exposes — i.e. queries + OOD samples +
-	/// sumcheck round polynomials summed across all codeswitch rounds and
-	/// the final trivial step. The per-round contribution is bounded by
-	/// `θ + η = 66` functionals (`θ = 64` in-domain queries + `η = 2` OOD
-	/// samples per round), conservatively rounded to `θ_aux ≤ 70` to absorb
-	/// any per-implementation accounting variation. The codeswitch round
-	/// count is bounded by `R ≤ 9` for any deployable `n_star` (largest
-	/// `N ≤ 2^24` at `n* = 16,383`). The base-case term `Q_base ≤ 100`
-	/// covers Construction 7.2: `θ = 64` in-domain spotchecks + `θ_mask = 32`
-	/// mask cross-checks + Merkle companions. The closed-form bound
-	/// `70·R + 100 ≤ 730` covers any deployable `n_star` (paper Eq. 9);
-	/// we adopt 832 with ≥ 102-functional headroom for accounting variation.
-	/// Dropping the prior next-pow-2 rounding to 1024 keeps `nu_prime` one
-	/// octave smaller at boundary `n_star` values.
-	pub const Q_MAX: u64 = 832;
+	/// Per-signature codeword-position queries of the zk-WHIR HVZK
+	/// simulator against `enc(c)` (the initial commitment). Equals the
+	/// in-domain spotcheck count `θ` of the first code-switching round
+	/// (paper §2.3): by inspection of Lemmas 6.4 / 7.3 / 9.8 of
+	/// eprint 2026/391, that round is the only one whose simulator
+	/// consults `enc(c)` directly — subsequent rounds query the
+	/// round-local codewords `g_2, …, g_R` (each with its own Prop. 3.19
+	/// randomness), and OOD answers are handled by the private
+	/// zero-evader of Lemma 9.3 and consume no `enc(c)` budget.
+	pub const THETA: u64 = 64;
 
 	/// `N = 2^ν'` — the WHIR primitive's internal ZK-encoded message
 	/// length per Prop. 3.19 of eprint 2026/391. The primitive samples
 	/// the trailing `N − M` slots as encoding randomness (the HVZK
-	/// budget); we size that budget so the cumulative F-linear
-	/// functionals across all `n*` signatures are absorbed by it — i.e.
-	/// perfect honest-verifier ZK across the full signing budget.
+	/// budget); we size that budget to `≥ n* · θ` so the cumulative
+	/// codeword-position queries across all `n*` signatures are absorbed
+	/// by it — i.e. perfect honest-verifier ZK across the full signing
+	/// budget (paper Lemma 11).
 	pub fn nu_prime(&self) -> u32 {
-		let total = self.m() as u64 + (self.n_star as u64).saturating_mul(Self::Q_MAX);
-		// At least `M + Q_MAX` so a single-signature deployment still has
+		let total = self.m() as u64 + (self.n_star as u64).saturating_mul(Self::THETA);
+		// At least `M + θ` so a single-signature deployment still has
 		// nontrivial HVZK budget.
-		let total = total.max(self.m() as u64 + Self::Q_MAX);
+		let total = total.max(self.m() as u64 + Self::THETA);
 		ceil_log2_u64(total)
 	}
 
@@ -211,9 +208,9 @@ mod tests {
 		assert_eq!(p.m(), 1 << 14);
 		assert_eq!(p.d(), (1 << 14) - 1);
 		assert_eq!(p.n_cliff(), 1024);
-		// HVZK budget ≥ 1023 · 832 ≈ 851K ⇒ N ≥ 16K + 851K ≈ 867K ≤ 2^20.
-		assert_eq!(p.nu_prime(), 20);
-		assert_eq!(p.n(), 1 << 20);
+		// HVZK budget ≥ 1023 · 64 ≈ 65K ⇒ N ≥ 16K + 65K ≈ 82K ≤ 2^17.
+		assert_eq!(p.nu_prime(), 17);
+		assert_eq!(p.n(), 1 << 17);
 	}
 
 	#[test]
@@ -221,7 +218,14 @@ mod tests {
 		for n_star in [1u32, 3, 7, 15, 31, 63, 127, 255, 511, 1023] {
 			let p = Params::new(n_star);
 			assert!(p.nu_prime() > p.nu(), "n_star={n_star}");
-			assert!((p.n() - p.m()) as u64 >= 300, "n_star={n_star}");
+			// Sanity: the HVZK budget B = N − M must absorb at least
+			// `n* · θ` codeword-position queries (Lemma 11 hypothesis).
+			assert!(
+				(p.n() - p.m()) as u64 >= (n_star as u64) * Params::THETA,
+				"n_star={n_star}: B = {} < n* · θ = {}",
+				p.n() - p.m(),
+				(n_star as u64) * Params::THETA
+			);
 		}
 	}
 
