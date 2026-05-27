@@ -563,7 +563,7 @@ mod tests {
 	use std::collections::HashSet;
 
 	fn random_gl(rng: &mut ChaCha20Rng) -> Goldilocks {
-		use rand::RngCore;
+		use rand::Rng;
 		loop {
 			let v: u64 = rng.next_u64();
 			if v < Q0 {

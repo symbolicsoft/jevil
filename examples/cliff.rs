@@ -15,7 +15,6 @@ use std::collections::HashMap;
 use std::env;
 
 use jevil::{Goldilocks4, Params, keygen, sign, verify};
-use rand::rngs::OsRng;
 use shake::{ExtendableOutput, Shake256, Update, XofReader};
 
 fn main() {
@@ -40,7 +39,7 @@ fn main() {
 
 	// Fresh entropy from the OS each run, so the recovered polynomial differs
 	// every time you run this demo.
-	let mut rng = OsRng;
+	let mut rng = rand::rng();
 	let (pk, sk, cache) = keygen(&mut rng, params);
 	println!(
 		"Keygen done. Root prefix: {:02x}{:02x}…{:02x}{:02x}",

@@ -3,7 +3,6 @@
 //! Run with `cargo run --release --example basic`.
 
 use jevil::{Params, keygen, sign, verify};
-use rand::rngs::OsRng;
 
 fn main() {
 	// Params::new requires `n_star + 1` to be a power of two (1, 3, 7, 15, …).
@@ -18,8 +17,8 @@ fn main() {
 		params.n_cliff(),
 	);
 
-	// OsRng pulls fresh entropy from the operating system every run.
-	let mut rng = OsRng;
+	// `rand::rng()` pulls fresh entropy from the operating system every run.
+	let mut rng = rand::rng();
 	println!("Generating key…");
 	let (pk, sk, cache) = keygen(&mut rng, params);
 	println!(

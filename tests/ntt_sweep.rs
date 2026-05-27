@@ -11,7 +11,7 @@
 //! twiddle sequence.
 
 use jevil::Goldilocks4;
-use rand::{RngCore, SeedableRng};
+use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha20Rng;
 
 /// Evaluate `f(x) = Σ_k coeffs[k] · x^k` via Horner over the extension.

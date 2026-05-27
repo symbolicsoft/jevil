@@ -14,7 +14,6 @@ use std::env;
 use std::time::Instant;
 
 use jevil::{Params, keygen, sign, verify};
-use rand::rngs::OsRng;
 
 fn main() {
 	let arg = env::args()
@@ -44,7 +43,7 @@ fn main() {
 		let params = Params::new(n_star);
 		// Fresh OS entropy per iteration so the timings reflect real keys,
 		// not a single recycled seed.
-		let mut rng = OsRng;
+		let mut rng = rand::rng();
 
 		let t0 = Instant::now();
 		let (pk, sk, cache) = keygen(&mut rng, params);

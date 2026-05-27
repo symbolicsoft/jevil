@@ -57,7 +57,10 @@ impl Params {
 	/// assertion catches the mistake at construction rather than producing a
 	/// silently-misconfigured deployment.
 	pub const fn new(n_star: u32) -> Self {
-		assert!(n_star >= 1, "Params::new: n_star must be ≥ 1 (per spec §4.1)");
+		assert!(
+			n_star >= 1,
+			"Params::new: n_star must be ≥ 1 (per spec §4.1)"
+		);
 		// (n_star + 1) must be a power of two ⇔ (n_star + 1) & n_star == 0.
 		// `n_star ≥ 1` means `n_star + 1 ≥ 2` so this is never the special-cased
 		// `0 & ?`. We pre-check the high bit to keep the addition in u32 range:

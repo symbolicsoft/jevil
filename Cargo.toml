@@ -22,12 +22,12 @@ p3-symmetric  = "0.5"
 shake         = "0.1"
 spongefish    = { version = "0.7", features = ["ark-ff", "derive"] }
 effsc         = { git = "https://github.com/compsec-epfl/efficient-sumcheck" }
-rand          = "0.8"
+rand          = "0.10"
 thiserror     = "2"
-zeroize       = { version = "1.7", features = ["derive"] }
+zeroize       = { version = "1.8", features = ["derive"] }
 
 [dev-dependencies]
-rand_chacha = "0.3"
+rand_chacha = "0.10"
 sha2        = "0.11"
 hex         = "0.4"
 

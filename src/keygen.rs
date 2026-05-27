@@ -1,6 +1,6 @@
 //! Key generation — paper §4.3 (Construction 1).
 
-use rand::{CryptoRng, RngCore};
+use rand::{CryptoRng, Rng};
 
 use crate::field::Goldilocks4;
 use crate::hash::{JV_OOD, JV_SEED};
@@ -67,7 +67,7 @@ impl SignerCache {
 /// uses the same `σ` to deterministically derive its internal Prop. 3.19
 /// encoding randomness via `JV-RZK`. The same `(rng-state, params)`
 /// always produces the same public key.
-pub fn keygen<R: RngCore + CryptoRng>(
+pub fn keygen<R: Rng + CryptoRng>(
 	rng: &mut R,
 	params: Params,
 ) -> (PublicKey, SecretKey, SignerCache) {
