@@ -1,4 +1,4 @@
-//! Verification — paper §4.3.
+//! Verification — paper §4.3 (Construction 3).
 
 use spongefish::domain_separator;
 
@@ -13,7 +13,7 @@ use crate::whir::ConcreteWhirVerifier;
 use crate::{Error, PublicKey};
 
 /// Verify a Jevil signature. Realizes `Jevil.Verify` of the paper
-/// (`§3.3, Construction 6`).
+/// (`§4.3, Construction 3`).
 ///
 /// Returns `Ok(())` iff the signature is valid for `(pk, params, msg)`.
 /// Returns one of:
@@ -82,7 +82,7 @@ pub fn verify(pk: &PublicKey, params: Params, msg: &[u8], sig: &Signature) -> Re
 	let alpha = BatchedAlpha::new(&xs, betas, params.nu());
 
 	// 5. Run WHIR's verifier on top, binding the opening to `pk.root`
-	//    (paper §2.3 Def. 7: WHIR.Verify takes `root` as a verifier input).
+	//    (paper §3.5 Def. 5: WHIR.Verify takes `root` as a verifier input).
 	//    Without this binding, the WHIR layer would accept openings against
 	//    any prover-chosen commitment — letting an attacker forge with a
 	//    self-committed polynomial that only needs to satisfy f'(z) = pk.w.

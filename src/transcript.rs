@@ -13,10 +13,10 @@ use crate::params::Params;
 /// Construct the deterministic prefix bytes injected into the spongefish
 /// domain separator's *instance* bytes by both signer and verifier.
 ///
-/// Layout (paper §4.2 step 4 / §4.3 step 3):
+/// Layout (paper §4.3, "Binding the zk-WHIR transcript" paragraph):
 ///
 /// ```text
-/// "JV-OPEN "                (8 bytes, paper §2.2 space-padded tag)
+/// "JV-OPEN "                (8 bytes, paper §3.4 space-padded tag)
 /// params.canonical_bytes()  (4 bytes — n_star LE; K is the global constant)
 /// root                      (32 bytes)
 /// w.to_bytes()              (32 bytes — OOD value f(z) from pk)
@@ -49,10 +49,10 @@ pub(crate) fn prefix_bytes(
 ///
 /// Uses the `JV-FSCH` SHAKE256 stream with per-limb rejection sampling, so
 /// each `β_t` is uniform in `F_{q₀⁴}`. The hashed sequence is exactly the
-/// spec §4.2 step 4 layout — `root`, `msg`, then each `y_t` — with the length
-/// prefix supplied automatically by [`crate::hash::hash`]'s framing. The
-/// trailing `β_{K+1}` weights the OOD constraint `g(z) = w` per paper §4.2
-/// step 5 (`α += β_{K+1} · u(z)`, `v += β_{K+1} · w`).
+/// spec §4.3 Construction 2 step 5 layout — `root`, `msg`, then each `y_t` —
+/// with the length prefix supplied automatically by [`crate::hash::hash`]'s
+/// framing. The trailing `β_{K+1}` weights the OOD constraint `g(z) = w` per
+/// Construction 2 step 6 (`α += β_{K+1} · u(z)`, `v += β_{K+1} · w`).
 pub(crate) fn derive_betas(root: &[u8; 32], msg: &[u8], ys: &[Goldilocks4]) -> Vec<Goldilocks4> {
 	let want = ys.len() + 1;
 	let y_bytes: Vec<[u8; 32]> = ys.iter().map(|y| y.to_bytes()).collect();

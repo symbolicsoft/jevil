@@ -1,4 +1,4 @@
-//! Signing — paper §4.2.
+//! Signing — paper §4.3 (Construction 2).
 
 use spongefish::domain_separator;
 
@@ -58,15 +58,15 @@ impl Signature {
 }
 
 /// Produce a Jevil signature on `msg` under `(pk, sk)`. Realizes
-/// `Jevil.Sign` of the paper (`§3.3, Construction 5`).
+/// `Jevil.Sign` of the paper (`§4.3, Construction 2`).
 ///
 /// `cache` must be the [`SignerCache`] returned by [`crate::keygen`] (or
 /// rebuilt via [`SignerCache::from_secret`]) for this `sk`; passing a cache
 /// from a different signer produces undefined output.
 ///
 /// `sk` is consumed to derive the per-signature prover-randomness seed
-/// `ρ = H_xof(JV-OPRD, s, root, msg, y_1, …, y_K; 32)` per paper §2.2 /
-/// Construction 5 step 6: that seed deterministically drives every
+/// `ρ = H_xof(JV-OPRD, s, root, msg, y_1, …, y_K; 32)` per paper §3.4 /
+/// Construction 2 step 7: that seed deterministically drives every
 /// internally-sampled value inside `WHIR.Open` (sumcheck masks,
 /// code-switching masks, OOD answers), so `Sign` is a pure function of
 /// `(sk, pk, msg)`.
@@ -88,7 +88,7 @@ pub fn sign(
 	// 2. y_t = f(x_t) via Horner over the M coefficients in `cache.c`.
 	let ys: Vec<Goldilocks4> = xs_msg.iter().map(|&x| horner(&cache.c, x)).collect();
 
-	// 3. Re-derive the OOD point `z` from `pk.root` (Construction 5 step 4 —
+	// 3. Re-derive the OOD point `z` from `pk.root` (Construction 2 step 4 —
 	//    identical derivation to KeyGen, so the signer recomputes the same
 	//    `z` used there to fix `w`). Append `z` to the position list so the
 	//    α-construction loop below produces α = Σ_{t≤K} β_t·u(x_t) +
@@ -132,11 +132,11 @@ pub fn sign(
 
 	// Derive the per-signature prover-randomness seed ρ from
 	// (sk_seed, root, msg, y_1, …, y_K) under the JV-OPRD domain tag
-	// (paper §2.2 / Construction 5 step 6). Deterministic but unique
+	// (paper §3.4 / Construction 2 step 7). Deterministic but unique
 	// per signature; the seed drives every internally-sampled value
-	// inside `WHIR.Open` (sumcheck masks via Construction 6.3,
-	// code-switching masks via Construction 9.7, OOD answers via
-	// Lemma 9.3).
+	// inside `WHIR.Open` (sumcheck masks via Construction 6.3 of
+	// eprint 2026/391, code-switching masks via Construction 9.7,
+	// OOD answers via Lemma 9.3).
 	let mask_seed = derive_prover_randomness_seed(sk, &pk.root, msg, &ys);
 
 	let whir = build_whir_protocol(params);
@@ -149,22 +149,22 @@ pub fn sign(
 }
 
 /// Derive the per-signature prover-randomness seed `ρ` from
-/// `(sk_seed, root, msg, y_1, …, y_K)` per paper §2.2 / Construction 5
-/// step 6.
+/// `(sk_seed, root, msg, y_1, …, y_K)` per paper §3.4 / Construction 2
+/// step 7.
 ///
 /// ## Spec interface vs. implementation chain
 ///
 /// The spec describes `ρ` in two complementary ways:
 ///
-/// - Construction 5 step 6: `ρ ← H_xof(JV-OPRD, s, root, M, y_1, …, y_K; ∞)`
+/// - Construction 2 step 7: `ρ ← H_xof(JV-OPRD, s, root, M, y_1, …, y_K; ∞)`
 ///   — an XOF stream parametrised by all the per-signature inputs.
-/// - Definition 7 (`WHIR.Open(st, α, v; ρ) → π`): "a 32-byte randomness
+/// - Definition 5 (`WHIR.Open(st, α, v; ρ) → π`): "a 32-byte randomness
 ///   seed `ρ`" that drives the prover-internal randomness.
 ///
 /// The two are consistent in the random-oracle model: an XOF stream over
 /// `(JV-OPRD, …)` and a 32-byte seed thereof both produce the same per-
 /// purpose downstream randomness under further RO-modelled expansion.
-/// This function returns the 32-byte seed (Def. 7's interface);
+/// This function returns the 32-byte seed (Def. 5's interface);
 /// downstream consumers — sumcheck round-poly masks, code-switching
 /// padding masks, base-case mask companions — re-expand it per purpose
 /// via `derive_field_vec(seed, purpose, …)` which calls

@@ -9,7 +9,7 @@
 //! 3. *verify* that opening against a public commitment root (run during
 //!    [`crate::verify`]).
 //!
-//! See the paper §2.3 (`def:whir`) for the full WHIR API contract. The
+//! See the paper §3.5 (`def:whir`) for the full WHIR API contract. The
 //! API exposed here matches it byte-for-byte: callers pass length-`M`
 //! vectors and a 32-byte seed; the Prop. 3.19 encoding randomness lives
 //! entirely inside this module and never appears at the boundary. The

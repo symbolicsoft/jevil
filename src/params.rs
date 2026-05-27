@@ -7,7 +7,7 @@
 //! [`Params::K`] doc comment for the rationale.
 
 /// Configuration for a Jevil signer/verifier. Realizes the parameter
-/// recipe of paper §2.3.
+/// recipe of paper §4.1.
 ///
 /// The only field is the signing budget [`Params::n_star`]. All derived
 /// quantities (`M`, `T`, `ν`, `n_cliff`, the commit dimension `N`) are
@@ -16,7 +16,7 @@
 /// `θ = 64` the per-signature codeword-position query count of the WHIR
 /// HVZK simulator against `enc(c)`) sizes the Prop. 3.19 ZK encoding
 /// randomness to support multi-opening HVZK across the full signing
-/// budget (paper Lemma 11).
+/// budget (paper Lemma 1).
 ///
 /// **`n_star + 1` must be a power of two** — i.e. `n_star` must lie in the
 /// recommended set `{1, 3, 7, 15, 31, 63, 127, 255, 511, 1023, …}`. Within
@@ -57,7 +57,7 @@ impl Params {
 	/// assertion catches the mistake at construction rather than producing a
 	/// silently-misconfigured deployment.
 	pub const fn new(n_star: u32) -> Self {
-		assert!(n_star >= 1, "Params::new: n_star must be ≥ 1 (per spec §3)");
+		assert!(n_star >= 1, "Params::new: n_star must be ≥ 1 (per spec §4.1)");
 		// (n_star + 1) must be a power of two ⇔ (n_star + 1) & n_star == 0.
 		// `n_star ≥ 1` means `n_star + 1 ≥ 2` so this is never the special-cased
 		// `0 & ?`. We pre-check the high bit to keep the addition in u32 range:
@@ -130,7 +130,7 @@ impl Params {
 	/// Per-signature codeword-position queries of the zk-WHIR HVZK
 	/// simulator against `enc(c)` (the initial commitment). Equals the
 	/// in-domain spotcheck count `θ` of the first code-switching round
-	/// (paper §2.3): by inspection of Lemmas 6.4 / 7.3 / 9.8 of
+	/// (paper §3.5): by inspection of Lemmas 6.4 / 7.3 / 9.8 of
 	/// eprint 2026/391, that round is the only one whose simulator
 	/// consults `enc(c)` directly — subsequent rounds query the
 	/// round-local codewords `g_2, …, g_R` (each with its own Prop. 3.19
@@ -144,7 +144,7 @@ impl Params {
 	/// budget); we size that budget to `≥ n* · θ` so the cumulative
 	/// codeword-position queries across all `n*` signatures are absorbed
 	/// by it — i.e. perfect honest-verifier ZK across the full signing
-	/// budget (paper Lemma 11).
+	/// budget (paper Lemma 1).
 	pub fn nu_prime(&self) -> u32 {
 		let total = self.m() as u64 + (self.n_star as u64).saturating_mul(Self::THETA);
 		// At least `M + θ` so a single-signature deployment still has
@@ -160,7 +160,7 @@ impl Params {
 	}
 
 	/// Total inner-message length of the small ZK code `C_zk` used for
-	/// sumcheck masks and codeswitch mask oracles (paper §2.3,
+	/// sumcheck masks and codeswitch mask oracles (paper §3.5,
 	/// `ℓ_zk := 64 = ℓ_zk^data + t_zk = 32 + 32`). Rate `1/16` (tighter
 	/// than the main code's `1/4`) halves the per-mask spotcheck count;
 	/// evaluation domain `m_zk = ℓ_zk / ρ_zk = 1024`, NTT-friendly.
@@ -219,7 +219,7 @@ mod tests {
 			let p = Params::new(n_star);
 			assert!(p.nu_prime() > p.nu(), "n_star={n_star}");
 			// Sanity: the HVZK budget B = N − M must absorb at least
-			// `n* · θ` codeword-position queries (Lemma 11 hypothesis).
+			// `n* · θ` codeword-position queries (Lemma 1 hypothesis).
 			assert!(
 				(p.n() - p.m()) as u64 >= (n_star as u64) * Params::THETA,
 				"n_star={n_star}: B = {} < n* · θ = {}",
@@ -247,7 +247,7 @@ mod tests {
 
 	#[test]
 	fn t_matches_paper_for_reference_configs() {
-		// Paper §6.2 (sample sizes at K = 16, λ = λ_H = 128):
+		// Paper §7.2 (sample sizes at K = 16, λ = λ_H = 128):
 		// n*=127 ⇒ T = 2^27,  n*=1023 ⇒ T = 2^30,  n*=16,383 ⇒ T = 2^34.
 		assert_eq!(Params::new(127).t(), 1 << 27);
 		assert_eq!(Params::new(1023).t(), 1 << 30);

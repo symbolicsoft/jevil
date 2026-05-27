@@ -485,7 +485,7 @@ fn omega_34() -> &'static Goldilocks4 {
 /// target` when `target` is a quadratic residue, otherwise `None`.
 ///
 /// `q₀ − 1 = 2³² · m` with `m = 2³² − 1` (odd); `S = 32`. The non-residue
-/// witness is `7` (paper §2.3 confirms `(7/q₀) = −1` via reciprocity).
+/// witness is `7` (paper §3.3 confirms `(7/q₀) = −1` via reciprocity).
 fn goldilocks_sqrt(target: Goldilocks) -> Option<Goldilocks> {
 	if target.is_zero() {
 		return Some(Goldilocks::new(0));

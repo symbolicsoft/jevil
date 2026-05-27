@@ -6,7 +6,7 @@
 //! "zero evader" mechanism is the DEEP-FRI sampling-outside-the-box trick,
 //! which restores tight soundness for low-rate Reed–Solomon proximity tests.
 //!
-//! Jevil fixes `η = 2` (spec §2.3): two independent OOD seeds are drawn from
+//! Jevil fixes `η = 2` (spec §3.5, Table 4): two independent OOD seeds are drawn from
 //! the transcript each round, and the prover returns two evaluations and two
 //! corresponding linear-form constraints.
 //!
@@ -34,7 +34,7 @@ use crate::field::Goldilocks4;
 
 /// Fixed number of OOD evader queries per codeswitch round.
 ///
-/// Spec §2.3 specifies `η = 2`; the WHIR soundness analysis (~2⁻¹²⁸ at the
+/// Spec §3.5 (Table 4) specifies `η = 2`; the WHIR soundness analysis (~2⁻¹²⁸ at the
 /// reference parameters) depends on this value.
 pub(crate) const ETA: usize = 2;
 

@@ -1,14 +1,14 @@
-//! Partial Fisher–Yates position derivation (paper §4.4).
+//! Partial Fisher–Yates position derivation (paper §4.3, Construction 2 step 2).
 //!
 //! Given `(root, msg)`, derive `K` *distinct* positions in `[0, T)` from the
 //! `JV-POSN` SHAKE256 stream. The sampling is unbiased (no modulo bias) and
 //! deterministic, identical between signer and verifier.
 //!
-//! The pool is the *lazy* identity `A[j] = j` (per spec §4.4): we only
-//! materialise the entries the partial Fisher–Yates actually touches, via a
-//! `HashMap` overlay holding ≤ `2·K` entries total. This keeps memory O(K)
-//! instead of O(T) — relevant at the upper end of the parameter range where
-//! `T = 2²⁶` (the eager pool would be ~512 MB).
+//! The pool is the *lazy* identity `A[j] = j`: we only materialise the entries
+//! the partial Fisher–Yates actually touches, via a `HashMap` overlay holding
+//! ≤ `2·K` entries total. This keeps memory O(K) instead of O(T) — relevant at
+//! the upper end of the parameter range where `T = 2²⁶` (the eager pool would
+//! be ~512 MB).
 
 use std::collections::HashMap;
 
@@ -17,12 +17,13 @@ use shake::XofReader;
 use crate::hash::{JV_POSN, shake256_xof};
 
 /// Derive `K` distinct ascending position indices in `[0, T)` from `(root,
-/// msg)` via the partial Fisher–Yates procedure of paper §4.4.
+/// msg)` via the partial Fisher–Yates procedure of paper §4.3 (Construction 2
+/// step 2).
 ///
 /// `b = ⌈log₂(T) / 8⌉` bytes per draw. Unbiased rejection sampling: any raw
 /// value `≥ floor(2^(8b) / m) · m` (where `m = pool_size` at that step) is
 /// rejected, so `val mod m` is uniform on `[0, m)`. Bytes come from a single
-/// continuous SHAKE256 XOF stream (matches spec §4.4's "from H_xof(JV-POSN,
+/// continuous SHAKE256 XOF stream (matches the spec's "from H_xof(JV-POSN,
 /// root, msg; ∞)" literally).
 pub(crate) fn derive_positions(root: &[u8; 32], msg: &[u8], k: usize, t: usize) -> Vec<usize> {
 	assert!(k > 0 && k <= t, "k={k} t={t}");

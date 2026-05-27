@@ -57,7 +57,7 @@ use crate::field::Goldilocks4;
 use crate::hash::JV_RZK;
 
 // ---------------------------------------------------------------------------
-// Constants matching the reference WHIR parameter set (paper §2.3)
+// Constants matching the reference WHIR parameter set (paper §3.5, Table 4)
 // ---------------------------------------------------------------------------
 
 /// Interleaving factor for the outer code (groups of `INTERLEAVING` inner
@@ -131,7 +131,7 @@ impl ProverCodeswitch {
 		let (padding_root, padding_vc_state) = padding_vc.commit_slab(padding_slab);
 		transcript.prover_message(&padding_root);
 
-		// Spec §2.3 fixes η = 2: draw two independent OOD seeds, then return
+		// Spec §3.5 fixes η = 2: draw two independent OOD seeds, then return
 		// two evaluations and two corresponding linear-form constraints.
 		let ood_seeds: Vec<Goldilocks4> = (0..ETA).map(|_| transcript.verifier_message()).collect();
 		// Privacy-padded OOD: y_i = ze(ρ_i)·folded_msg + padding_msg[i] for
@@ -564,7 +564,7 @@ impl ConcreteWhirVerifier {
 	/// inner sumcheck expects.
 	///
 	/// `expected_root` is the public-key commitment digest the caller wants
-	/// the proof to open against (paper §2.3 Def. 7: WHIR.Verify takes
+	/// the proof to open against (paper §3.5 Def. 5: WHIR.Verify takes
 	/// `root` as an input). The first prover message of the WHIR proof
 	/// carries the commit root that was committed under at signing time;
 	/// we read it, absorb it into the Fiat–Shamir sponge (so the

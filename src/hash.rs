@@ -39,7 +39,7 @@ use p3_symmetric::Permutation;
 use shake::{ExtendableOutput, Shake256, Update, XofReader};
 
 // ---------------------------------------------------------------------------
-// Domain tags (paper §2.2)
+// Domain tags (paper §3.4, Table 3)
 // ---------------------------------------------------------------------------
 
 /// Domain tag for the seed-derived polynomial coefficients (XOF).
@@ -63,7 +63,7 @@ pub(crate) const JV_WHIR: [u8; 8] = *b"JV-WHIR ";
 pub(crate) const JV_OPEN: [u8; 8] = *b"JV-OPEN ";
 /// Domain tag for the per-signature prover-randomness derivation (XOF).
 /// Used by [`crate::sign`] to derive a deterministic seed from
-/// `(s, root, msg, y_1, …, y_K)` per paper §2.2 / §4.2 step 6; the resulting
+/// `(s, root, msg, y_1, …, y_K)` per paper §3.4 / §4.3 Construction 2 step 7; the resulting
 /// seed feeds **all** internal randomness consumed by `WHIR.Open` — sumcheck
 /// round-polynomial masks (Construction 6.3), code-switching mask oracles
 /// (Construction 9.7), and OOD answers (Lemma 9.3) — so that `Sign` is a
@@ -77,7 +77,7 @@ pub(crate) const JV_OPRD: [u8; 8] = *b"JV-OPRD ";
 /// (the signer never transmits it). Bound by the OOD value `w = f(z)`
 /// stored in the public key, this collapses an outsider's cap-binding
 /// extraction from "needs ≥ ⌈M/K⌉ accepting signatures" to "one accepting
-/// signature suffices" (paper §5.1, Theorem 13). The trailing three
+/// signature suffices" (paper §6.1, Theorem 3). The trailing three
 /// `0x20` bytes pad the five-character `JV-OOD` ASCII tag out to the
 /// fixed 8-byte slot.
 pub(crate) const JV_OOD: [u8; 8] = *b"JV-OOD  ";
@@ -300,7 +300,7 @@ mod tests {
 
 	#[test]
 	fn spec_tags_are_present() {
-		// Per paper §2.2: 8-byte ASCII strings right-padded with 0x20 (space).
+		// Per paper §3.4: 8-byte ASCII strings right-padded with 0x20 (space).
 		assert_eq!(&JV_SEED, b"JV-SEED ");
 		assert_eq!(&JV_RZK, b"JV-RZK  ");
 		assert_eq!(&JV_POSN, b"JV-POSN ");

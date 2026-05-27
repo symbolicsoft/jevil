@@ -135,8 +135,8 @@ pub use crate::params::Params;
 pub use crate::sign::{Signature, sign};
 pub use crate::verify::verify;
 
-/// A Jevil public key. Realizes the `pk = (root, w, n*)` of paper §3.3,
-/// Construction 4 (`KeyGen`).
+/// A Jevil public key. Realizes the `pk = (root, w, n*)` of paper §4.3,
+/// Construction 1 (`KeyGen`).
 ///
 /// Layout: 32-byte zk-WHIR commitment root, 32-byte OOD value
 /// `w = f(z) ∈ F`, and a 4-byte little-endian `n_star`. The OOD point `z`
@@ -147,7 +147,7 @@ pub use crate::verify::verify;
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PublicKey {
 	/// 32-byte zk-WHIR commitment root over the coefficient vector
-	/// `c ∈ F^M`. Bound by the cap-binding theorem (paper Theorem 11):
+	/// `c ∈ F^M`. Bound by the cap-binding theorem (paper Theorem 3):
 	/// every accepting opening against this root reveals an evaluation of
 	/// a degree-≤`D` polynomial.
 	pub root: [u8; 32],
@@ -155,8 +155,7 @@ pub struct PublicKey {
 	/// `JV-OOD`. Bound by the cap-binding theorem to be one publicly-known
 	/// evaluation pair `(z, f(z))` of the committed polynomial; lets a
 	/// single accepting signature pin down `g` within the proximity ball
-	/// instead of requiring `⌈M/K⌉` accumulating ones (paper §5.1,
-	/// Theorem 13).
+	/// instead of requiring `⌈M/K⌉` accumulating ones (paper §6.1).
 	pub w: Goldilocks4,
 	/// Signing budget `n*` chosen at [`keygen`].
 	pub n_star: u32,
@@ -189,7 +188,7 @@ impl PublicKey {
 }
 
 /// A Jevil signing secret: a 32-byte seed from which every other signer-side
-/// value is deterministically derived (paper §3.3, Construction 4 step 1:
+/// value is deterministically derived (paper §4.3, Construction 1 step 1:
 /// `s ← {0,1}^256`).
 ///
 /// The seed expands into the polynomial coefficients `c = (c_0, …, c_{M−1})`

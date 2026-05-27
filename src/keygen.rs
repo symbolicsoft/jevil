@@ -1,4 +1,4 @@
-//! Key generation — paper §4.1.
+//! Key generation — paper §4.3 (Construction 1).
 
 use rand::{CryptoRng, RngCore};
 
@@ -60,7 +60,7 @@ impl SignerCache {
 }
 
 /// Generate a fresh `(PublicKey, SecretKey, SignerCache)` triple from a CSPRNG.
-/// Realizes `Jevil.KeyGen` of the paper (`§3.3, Construction 4`).
+/// Realizes `Jevil.KeyGen` of the paper (`§4.3, Construction 1`).
 ///
 /// `rng` is consumed only to draw a 32-byte uniform `σ`. The polynomial
 /// coefficients `c` are derived from `σ` via `JV-SEED`, and `WHIR.Commit`
@@ -78,7 +78,7 @@ pub fn keygen<R: RngCore + CryptoRng>(
 	let whir = build_whir_protocol(params);
 	let (root, whir_state) = whir.commit(&c, &sigma);
 
-	// Spec §4.1, Construction 4 steps 4–5: derive the OOD binding point
+	// Spec §4.3, Construction 1 steps 4–5: derive the OOD binding point
 	// `z` from `root` via `JV-OOD` and publish `w = f(z)` in `pk`.
 	let z = derive_ood_point(&root);
 	let w = horner(&c, z);
