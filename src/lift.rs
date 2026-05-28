@@ -14,11 +14,11 @@
 //! u(x)(s₁, …, s_ν) = ∏_{j=1}^{ν} F_j(s_j),   F_j(s) = 1 − s + s · x^{2^{j-1}}.
 //! ```
 //!
-//! [`MonomialLift`] materialises either the length-`M` lift
-//! ([`MonomialLift::materialize`]) or its `ν`-variable folded form
-//! ([`MonomialLift::folded`]) in `O(ν)` instead of `O(M)`. The verifier
-//! uses the folded form via [`crate::alpha::BatchedAlpha`] to avoid
-//! materialising any length-`M` vector.
+//! [`MonomialLift`] computes the `ν`-variable folded form
+//! ([`MonomialLift::folded`]) in `O(ν)` instead of `O(M)`. The verifier uses
+//! the folded form via [`crate::alpha::BatchedAlpha`] to avoid materialising
+//! any length-`M` vector. (A test-only `materialize` builds the explicit
+//! length-`M` lift as a reference oracle for the unit tests.)
 
 use crate::field::Goldilocks4;
 
@@ -49,7 +49,7 @@ impl MonomialLift {
 	/// symbolic [`MonomialLift::folded`] path is checked; production
 	/// callers (signer and verifier) never materialise a single lift
 	/// directly.
-	#[allow(dead_code)]
+	#[cfg(test)]
 	pub(crate) fn materialize(&self) -> Vec<Goldilocks4> {
 		// Append-doubling: start with [1]; at step `j ∈ {1, …, ν}`, multiply
 		// each new "right half" entry by `a_j = x^{2^{j-1}}`.

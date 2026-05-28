@@ -8,9 +8,10 @@
 //! Twiddle factors `[ω_n^0, ω_n^1, …, ω_n^{n/2 - 1}]` are computed once per
 //! `log_n` on first use and cached in a `OnceLock` array.
 //!
-//! Every jevil deployment has `log_n ≤ 18` for the commit-dimension NTT
-//! (the largest deployable configuration, `n* = 16,383`, gives `N = 2¹⁸`).
-//! In that range `Goldilocks4::two_adic_generator(log_n)` lifts from the
+//! Every jevil deployment has `log_n ≤ 21` for the commit-dimension NTT: the
+//! largest deployable configuration, `n* = 16,383`, gives `N = 2²¹` (`M = 2¹⁸`
+//! plus the `n*·θ` HVZK budget), and the initial-commitment NTT runs over `N`
+//! symbols. In that range `Goldilocks4::two_adic_generator(log_n)` lifts from the
 //! Goldilocks base field (`[g, 0, 0, 0]`), so all its powers stay in the
 //! constant subfield — we store the twiddle table as `[Goldilocks]` and
 //! butterflies multiply via the 4-base-mul [`mul_by_base`] rather than the

@@ -7,9 +7,15 @@
 //!   [`InterleavedCode`] (factor 4 — i.e. 4 inner codewords per outer symbol).
 //! - Vector commitment: [`MerkleVc`] (Poseidon2-Goldilocks Merkle tree).
 //! - Zero evader: DEEP-FRI [`OodEvader`].
-//! - Fold cap: stop folding when the inner message length reaches the
-//!   `threshold` (Jevil uses 64; the `C_zk` evaluation domain is the
-//!   length-512 codeword resulting from `M_ZK = 128` at rate 1/4).
+//! - Fold cap: keep folding by `κ = 4` while the inner message length exceeds
+//!   `threshold = 64`. For even `ν'` this halts exactly at 64; for odd `ν'`
+//!   (e.g. the reference `n* = 1023`, `ν' = 17`) the `κ = 4` schedule cannot
+//!   land on `2⁶` and halts one step lower, at 32. Prover and verifier share
+//!   this schedule, so signatures verify and per-round soundness is unchanged;
+//!   this is a deviation from the paper's stated `2⁶` floor that should be
+//!   reconciled in the paper text.
+//! - `C_zk` (sumcheck / code-switching masks): `M_ZK = 64` at rate `1/16`, so
+//!   the mask evaluation domain is the length-1024 codeword (`m_zk = 1024`).
 //!
 //! ## Length-`M` API (paper `def:whir`)
 //!

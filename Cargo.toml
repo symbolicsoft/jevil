@@ -8,7 +8,7 @@ repository = "https://github.com/symbolicsoft/jevil"
 documentation = "https://docs.rs/jevil"
 readme = "README.md"
 keywords = ["cryptography", "signature", "post-quantum", "few-time", "whir"]
-categories = ["cryptography", "no-std"]
+categories = ["cryptography"]
 
 [lib]
 name = "jevil"
@@ -21,7 +21,7 @@ p3-poseidon2  = "0.5"
 p3-symmetric  = "0.5"
 shake         = "0.1"
 spongefish    = { version = "0.7", features = ["ark-ff", "derive"] }
-effsc         = { git = "https://github.com/compsec-epfl/efficient-sumcheck" }
+effsc         = { git = "https://github.com/compsec-epfl/efficient-sumcheck", rev = "d37cba539874671f2cf28392a958943cc072aa25" }
 rand          = "0.10"
 thiserror     = "2"
 zeroize       = { version = "1.8", features = ["derive"] }

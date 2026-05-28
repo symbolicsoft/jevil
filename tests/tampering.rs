@@ -39,6 +39,18 @@ fn rejects_wrong_root() {
 }
 
 #[test]
+fn rejects_tampered_w() {
+	// Flip the public OOD value w = f(z). The verifier folds β_{K+1}·w into the
+	// batched target v, so a tampered w yields a v the WHIR proof does not open
+	// to — guards the OOD-binding (paper §6.1, Theorem 3) at the integration
+	// level (the y-value and root tampers above don't touch w).
+	let (mut pk, sk, cache, params) = setup();
+	let sig = sign(&sk, &pk, &cache, params, b"hi");
+	pk.w += Goldilocks4::ONE;
+	assert!(verify(&pk, params, b"hi", &sig).is_err());
+}
+
+#[test]
 fn rejects_wrong_msg() {
 	let (pk, sk, cache, params) = setup();
 	let sig = sign(&sk, &pk, &cache, params, b"a");

@@ -23,9 +23,12 @@
 /// this regime `(n_star + 1) · K` is itself a power of two, `M = (n_star +
 /// 1) · K` exactly, and the cliff fires at signature `n_star + 1`. Outside
 /// it, `M` rounds up to the next power of two and a gap opens between
-/// `n_star` and `n_cliff` that erodes the HORS coverage margin. The
-/// constructor [`Params::new`] panics on any non-recommended `n_star` rather
-/// than letting a caller deploy into the bad regime by accident.
+/// `n_star` and `n_cliff` that erodes the HORS coverage margin. `n_star` is
+/// additionally capped at `2^14 − 1 = 16383`: beyond it the position space
+/// `T = nextpow2(2^20 · n_star)` would exceed the working field's `2^34`
+/// 2-adicity. The constructor [`Params::new`] panics on any out-of-range
+/// `n_star` rather than letting a caller deploy into the bad regime by
+/// accident.
 #[allow(clippy::doc_lazy_continuation)]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct Params {
@@ -50,12 +53,14 @@ impl Params {
 	/// Convenience constructor. Equivalent to `Params { n_star }` with a
 	/// recommended-regime check.
 	///
-	/// Panics if `n_star == 0` or if `n_star + 1` is not a power of two. The
-	/// latter restricts callers to the recommended regime `n_star ∈ {1, 3, 7,
-	/// 15, 31, 63, 127, 255, 511, 1023, …}` so that `M = (n_star + 1) · K`
-	/// exactly and the cliff fires at signature `n_star + 1`. A `const`-time
-	/// assertion catches the mistake at construction rather than producing a
-	/// silently-misconfigured deployment.
+	/// Panics if `n_star == 0`, if `n_star + 1` is not a power of two, or if
+	/// `n_star > 16383 = 2^14 − 1` (the 2-adicity ceiling, beyond which the
+	/// position space `T` would exceed `2^34`). The power-of-two rule restricts
+	/// callers to the recommended regime `n_star ∈ {1, 3, 7, 15, 31, 63, 127,
+	/// 255, 511, 1023, …, 16383}` so that `M = (n_star + 1) · K` exactly and the
+	/// cliff fires at signature `n_star + 1`. A `const`-time assertion catches
+	/// the mistake at construction rather than producing a silently-misconfigured
+	/// deployment.
 	pub const fn new(n_star: u32) -> Self {
 		assert!(
 			n_star >= 1,
@@ -74,6 +79,16 @@ impl Params {
 			((n_star + 1) & n_star) == 0,
 			"Params::new: n_star + 1 must be a power of two (recommended regime: \
 			 n_star ∈ {{1, 3, 7, 15, 31, 63, 127, 255, 511, 1023, …}})"
+		);
+		// Upper bound (spec §4.1): the position space T = nextpow2(2^20 · n*)
+		// must fit under the working field's 2-adicity of 34. n* = 2^14 − 1
+		// gives T = 2^34 exactly; any larger budget would need a multiplicative
+		// subgroup of order > 2^34, which does not exist in F_{q₀⁴}^×, and would
+		// otherwise only surface as a panic deep inside `psi` / the NTT.
+		assert!(
+			n_star <= 16_383,
+			"Params::new: n_star must be ≤ 16383 = 2^14 − 1 (the field's 2-adicity \
+			 caps the position space at T ≤ 2^34; larger budgets are not deployable)"
 		);
 		Self { n_star }
 	}
@@ -278,6 +293,20 @@ mod tests {
 			assert!(
 				result.is_err(),
 				"Params::new({bad}) should have panicked (n_star + 1 not a power of two)"
+			);
+		}
+	}
+
+	#[test]
+	fn new_rejects_above_2adicity_ceiling() {
+		// `n_star + 1` is a power of two, but the position space T would exceed
+		// the field's 2^34 2-adicity (the largest deployable budget is
+		// 2^14 − 1 = 16383).
+		for bad in [32_767u32, 65_535, (1 << 20) - 1] {
+			let result = std::panic::catch_unwind(|| Params::new(bad));
+			assert!(
+				result.is_err(),
+				"Params::new({bad}) should have panicked (T > 2^34)"
 			);
 		}
 	}

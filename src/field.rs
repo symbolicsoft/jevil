@@ -352,9 +352,10 @@ impl Decoding<[u8]> for Goldilocks4 {
 
 	/// Squeeze 64 bytes from the Fiat–Shamir sponge per `F_{q₀⁴}` challenge:
 	/// 16 bytes per base-field limb, interpreted as a little-endian `u128`
-	/// and reduced mod `q₀`. The reduction is statistically uniform on
-	/// `[0, q₀)` up to bias `≤ q₀ / 2¹²⁸ ≈ 2⁻⁶⁴` per limb (`≤ 2⁻⁶²` per
-	/// `F`-element), well below the soundness target.
+	/// and reduced mod `q₀`. The exact total-variation distance from uniform
+	/// on `[0, q₀)` is `(q₀ − r)·r / (q₀·2¹²⁸)` with `r = 2¹²⁸ mod q₀`, i.e.
+	/// `≈ 2⁻⁹⁶` per limb (`≈ 2⁻⁹⁴` per `F`-element); the loose `q₀/2¹²⁸ ≈ 2⁻⁶⁴`
+	/// bound holds too. Either way far below the soundness target.
 	///
 	/// **Why 64 bytes, not 32 with `raw < q₀ ? raw : raw - q₀`?** The shorter
 	/// path is a single-subtraction modular reduction on a 64-bit raw input,
@@ -363,7 +364,7 @@ impl Decoding<[u8]> for Goldilocks4 {
 	/// margin is fine for honest random oracle outputs but the spec wants
 	/// uniform-on-F challenges, and a malicious grinder could in principle
 	/// amplify the bias. Doubling the per-element sponge squeeze removes
-	/// the bias entirely (modulo the negligible `≤ 2⁻⁶⁴` residue from
+	/// the bias entirely (down to the negligible `≈ 2⁻⁹⁶`-per-limb residue from
 	/// 128→64-bit reduction). Costs at most a few KB of sponge work per
 	/// signature; verifies the same on both sides because both squeeze 64.
 	fn decode(buf: Self::Repr) -> Self {

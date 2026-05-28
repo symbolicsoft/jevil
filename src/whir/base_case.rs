@@ -211,7 +211,6 @@ where
 	let input_msg_len = folded_commitment.msg_len();
 	let l_zk_inner = crate::params::Params::M_ZK - crate::params::Params::T_ZK;
 	let t_zk = crate::params::Params::T_ZK;
-	let m_zk_total = l_zk_inner + t_zk;
 	let zk_enc = ZkEncoding::new(l_zk_inner, t_zk);
 
 	// 1. Read g root.
@@ -359,8 +358,6 @@ where
 				}
 			}
 		}
-
-		let _ = m_zk_total; // suppress unused-binding warning
 	}
 
 	Ok(())

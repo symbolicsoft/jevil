@@ -7,8 +7,8 @@
 //! The pool is the *lazy* identity `A[j] = j`: we only materialise the entries
 //! the partial Fisher–Yates actually touches, via a `HashMap` overlay holding
 //! ≤ `2·K` entries total. This keeps memory O(K) instead of O(T) — relevant at
-//! the upper end of the parameter range where `T = 2²⁶` (the eager pool would
-//! be ~512 MB).
+//! the upper end of the parameter range where `T` reaches `2³⁴` (an eager
+//! pool would be ~128 GB).
 
 use std::collections::HashMap;
 

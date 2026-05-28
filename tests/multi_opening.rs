@@ -1,6 +1,8 @@
 //! Protocol-level exercises of the multi-opening regime (Lemma 11 of the
-//! Jevil paper). Asserts the properties that distinguish multi-opening from
-//! single-opening signing:
+//! Jevil paper): one public key opened by up to `n*` signatures. These tests
+//! check acceptance, non-malleability, cross-key non-transferability, and
+//! determinism — they do NOT assert a zero-knowledge / hiding property (no
+//! simulator-indistinguishability is exercised here).
 //!
 //! - `flagship_round_trip_at_full_budget` — every signature in a full `n*`
 //!   budget run verifies, demonstrating that Constructions 6.3, 7.2, 9.7,
@@ -14,7 +16,7 @@
 //!   against `pk_B`; cap-binding is not transferable across keys.
 //! - `deterministic_signatures_under_full_budget` — repeating the full
 //!   (keygen + `n*` signs) run with the same RNG seed yields byte-identical
-//!   artifacts; HVZK randomness is derived from the per-signature seed, not
+//!   artifacts; prover randomness is derived from the per-signature seed, not
 //!   from the OS RNG.
 
 use jevil::{Params, keygen, sign, verify};

@@ -118,20 +118,8 @@ fn lagrange_interpolate(pairs: &[(Goldilocks4, Goldilocks4)]) -> Vec<Goldilocks4
 // Paper §2.2: 8-byte ASCII strings right-padded with 0x20 (space).
 const JV_POSN: [u8; 8] = *b"JV-POSN ";
 
-fn shake256_tagged(tag: [u8; 8], inputs: &[&[u8]], out_len: usize) -> Vec<u8> {
-	let mut hasher = Shake256::default();
-	hasher.update(&tag);
-	for input in inputs {
-		hasher.update(&(input.len() as u64).to_le_bytes());
-		hasher.update(input);
-	}
-	let mut reader = hasher.finalize_xof();
-	let mut out = vec![0u8; out_len];
-	reader.read(&mut out);
-	out
-}
-
 fn psi(i: u64, t: u64) -> Goldilocks4 {
+	assert!(t.is_power_of_two(), "psi: t must be a power of two");
 	let log_t = t.trailing_zeros() as usize;
 	Goldilocks4::two_adic_generator(log_t).pow(i)
 }
@@ -139,10 +127,15 @@ fn psi(i: u64, t: u64) -> Goldilocks4 {
 fn derive_positions(root: &[u8; 32], msg: &[u8], k: usize, t: usize) -> Vec<usize> {
 	let log_t = t.trailing_zeros() as usize;
 	let b = log_t.div_ceil(8);
-	let initial_bytes = 32 + k * b * 4;
-	let mut stream = shake256_tagged(JV_POSN, &[root, msg], initial_bytes);
-	let mut cursor = 0usize;
-	let mut refill = 0u64;
+	// Single continuous SHAKE256 XOF stream, matching src/positions.rs and the
+	// spec's H_xof(JV-POSN, root, msg; ∞) — no fixed-buffer tag-counter refill.
+	let mut hasher = Shake256::default();
+	hasher.update(&JV_POSN);
+	for input in [root.as_slice(), msg] {
+		hasher.update(&(input.len() as u64).to_le_bytes());
+		hasher.update(input);
+	}
+	let mut reader = hasher.finalize_xof();
 	let mut pool: Vec<usize> = (0..t).collect();
 	let mut indices = Vec::with_capacity(k);
 	let mut pool_size = t;
@@ -155,15 +148,8 @@ fn derive_positions(root: &[u8; 32], msg: &[u8], k: usize, t: usize) -> Vec<usiz
 			(1u128 << (8 * b)) - 1
 		};
 		let j = loop {
-			if cursor + b > stream.len() {
-				refill += 1;
-				let tag = refill.to_le_bytes();
-				stream = shake256_tagged(JV_POSN, &[root, msg, &tag], initial_bytes);
-				cursor = 0;
-			}
 			let mut buf = [0u8; 16];
-			buf[..b].copy_from_slice(&stream[cursor..cursor + b]);
-			cursor += b;
+			reader.read(&mut buf[..b]);
 			let raw = u128::from_le_bytes(buf) & mask;
 			if raw < cutoff {
 				break (raw % m as u128) as usize;

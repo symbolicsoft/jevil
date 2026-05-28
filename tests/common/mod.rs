@@ -36,17 +36,24 @@ pub fn psi(i: u64, t: u64) -> Goldilocks4 {
 }
 
 /// Spec-side re-implementation of the partial Fisher–Yates position
-/// derivation (paper §4.4). Byte-for-byte identical to what the library does
-/// internally — divergence here would surface as a test failure in
-/// `positions.rs` or `cliff.rs`.
+/// derivation (paper §4.4). Mirrors the library's `src/positions.rs`: a single
+/// continuous SHAKE256 XOF stream over `H_xof(JV-POSN, root, msg; ∞)`, read
+/// `b = ⌈log₂(T)/8⌉` bytes per draw with unbiased rejection against the
+/// per-step shrinking pool. Re-derived independently of Jevil's private code,
+/// so a divergence surfaces as a test failure in `positions.rs` / `cliff.rs`.
 pub fn derive_positions(root: &[u8; 32], msg: &[u8], k: usize, t: usize) -> Vec<usize> {
 	let log_t = t.trailing_zeros() as usize;
 	let b = log_t.div_ceil(8);
-	let initial_bytes = 32 + k * b * 4;
 
-	let mut stream = shake256_tagged(JV_POSN, &[root, msg], initial_bytes);
-	let mut cursor = 0usize;
-	let mut refill = 0u64;
+	// Single continuous XOF stream over the canonical tag||len8(x)||x framing.
+	let mut hasher = Shake256::default();
+	hasher.update(&JV_POSN);
+	for input in [root.as_slice(), msg] {
+		hasher.update(&(input.len() as u64).to_le_bytes());
+		hasher.update(input);
+	}
+	let mut reader = hasher.finalize_xof();
+
 	let mut pool: Vec<usize> = (0..t).collect();
 	let mut indices = Vec::with_capacity(k);
 	let mut pool_size = t;
@@ -60,15 +67,8 @@ pub fn derive_positions(root: &[u8; 32], msg: &[u8], k: usize, t: usize) -> Vec<
 			(1u128 << (8 * b)) - 1
 		};
 		let j = loop {
-			if cursor + b > stream.len() {
-				refill += 1;
-				let tag = refill.to_le_bytes();
-				stream = shake256_tagged(JV_POSN, &[root, msg, &tag], initial_bytes);
-				cursor = 0;
-			}
 			let mut buf = [0u8; 16];
-			buf[..b].copy_from_slice(&stream[cursor..cursor + b]);
-			cursor += b;
+			reader.read(&mut buf[..b]);
 			let raw = u128::from_le_bytes(buf) & mask;
 			if raw < cutoff {
 				break (raw % m as u128) as usize;
