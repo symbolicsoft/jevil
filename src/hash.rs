@@ -33,8 +33,10 @@
 //! never produce the same serialised buffer as concatenating two of any other
 //! lengths.
 
+use std::sync::OnceLock;
+
 use p3_field::{PrimeCharacteristicRing, PrimeField64};
-use p3_goldilocks::{Goldilocks, default_goldilocks_poseidon2_12};
+use p3_goldilocks::{Goldilocks, Poseidon2Goldilocks, default_goldilocks_poseidon2_12};
 use p3_symmetric::Permutation;
 use shake::{ExtendableOutput, Shake256, Update, XofReader};
 
@@ -184,6 +186,21 @@ const POSEIDON2_RATE: usize = 8;
 #[cfg(test)]
 const POSEIDON2_RATE_BYTES: usize = POSEIDON2_RATE * 8;
 
+/// The shared Poseidon2-Goldilocks-12 permutation, constructed once on first
+/// use and reused for every H_VC invocation.
+///
+/// `default_goldilocks_poseidon2_12()` allocates and copies the full round-
+/// constant tables on every call (six heap allocations on aarch64's fused
+/// path). H_VC runs once per Merkle leaf **and** once per internal node, i.e.
+/// `≈ 2·N` times per `WHIR.Commit` (up to `≈ 2^22` at the largest deployment),
+/// so rebuilding the permutation per call dominated commit time. The
+/// permutation is immutable (`permute_mut` takes `&self`) and `Sync`, so a
+/// process-wide singleton is safe.
+fn poseidon2_perm() -> &'static Poseidon2Goldilocks<12> {
+	static CELL: OnceLock<Poseidon2Goldilocks<12>> = OnceLock::new();
+	CELL.get_or_init(default_goldilocks_poseidon2_12)
+}
+
 /// Deserialise 8 little-endian bytes into a canonical `Goldilocks` element.
 #[inline]
 fn bytes_to_goldilocks(chunk: &[u8]) -> Goldilocks {
@@ -205,7 +222,7 @@ fn bytes_to_goldilocks(chunk: &[u8]) -> Goldilocks {
 /// rate-8 chunks, zero-pad to a multiple of the rate, capacity IV =
 /// `IV_leaf`. Output is the first 4 state limbs as 32 bytes little-endian.
 pub(crate) fn hash_vc_leaf(symbols: &[crate::field::Goldilocks4]) -> [u8; 32] {
-	let perm = default_goldilocks_poseidon2_12();
+	let perm = poseidon2_perm();
 	let (iv_leaf, _) = h_vc_ivs();
 
 	let mut state = [Goldilocks::ZERO; POSEIDON2_WIDTH];
@@ -237,7 +254,7 @@ pub(crate) fn hash_vc_leaf(symbols: &[crate::field::Goldilocks4]) -> [u8; 32] {
 /// H_VC^node per paper §3.4. One-permutation compression of two 32-byte
 /// child digests. Capacity IV = `IV_node`.
 pub(crate) fn hash_vc_node(left: &[u8; 32], right: &[u8; 32]) -> [u8; 32] {
-	let perm = default_goldilocks_poseidon2_12();
+	let perm = poseidon2_perm();
 	let (_, iv_node) = h_vc_ivs();
 
 	let mut state = [Goldilocks::ZERO; POSEIDON2_WIDTH];
