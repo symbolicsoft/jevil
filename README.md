@@ -18,7 +18,7 @@
 > protect anything you care about. Do not deploy it. Do not rely on it for
 > any security property whatsoever.
 
-Jevil ([paper](https://eprint.iacr.org/2026/1103))is a post-quantum few-time
+Jevil ([paper](https://eprint.iacr.org/2026/1103)) is a post-quantum few-time
 signature scheme parameterised by a single signing budget `n*`.
 
 Signatures `1..=n*` are existentially unforgeable; at
