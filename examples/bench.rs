@@ -18,7 +18,7 @@ use jevil::{Params, keygen, sign, verify};
 fn main() {
 	let arg = env::args()
 		.nth(1)
-		.unwrap_or_else(|| "1,3,7,15,31".to_string());
+		.unwrap_or_else(|| "1,3,7,15,31,63,127,255,511,1023,2047,4095".to_string());
 	let n_stars: Vec<u32> = arg
 		.split(',')
 		.map(|s| s.trim().parse().expect("invalid n_star"))

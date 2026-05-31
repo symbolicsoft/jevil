@@ -110,7 +110,11 @@ fn lagrange_interpolate(pairs: &[(Goldilocks4, Goldilocks4)]) -> Vec<Goldilocks4
 		// Multiply in place by (X - x): new[k] = old[k-1] - x*old[k],
 		// walking high-to-low so old[k-1] is still intact when read.
 		for k in (0..=deg).rev() {
-			let lower = if k >= 1 { master[k - 1] } else { Goldilocks4::ZERO };
+			let lower = if k >= 1 {
+				master[k - 1]
+			} else {
+				Goldilocks4::ZERO
+			};
 			master[k] = lower - x * master[k];
 		}
 	}
