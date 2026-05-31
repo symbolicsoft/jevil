@@ -13,10 +13,12 @@
 
 use core::marker::PhantomData;
 
-use crate::field::SumcheckField;
+use rayon::prelude::*;
 use spongefish::{Decoding, Encoding, NargDeserialize, NargSerialize};
 
 use crate::field::Goldilocks4;
+use crate::field::SumcheckField;
+use crate::merkle::PAR_THRESHOLD;
 
 // ---------------------------------------------------------------------------
 // Field trait bundle (encodes the trait bounds WHIR needs on its alphabet)
@@ -212,10 +214,20 @@ impl InterleavedCode<ReedSolomon<Goldilocks4>> {
 		let chunk_size = input.len() / k_int;
 		let codeword_len = self.codeword_len();
 
-		let encoded_chunks: Vec<Vec<Goldilocks4>> = input
-			.chunks_exact(chunk_size)
-			.map(|chunk| self.inner_code.encode(chunk))
-			.collect();
+		// The `k_int` inner codewords are independent NTTs; run them
+		// concurrently for the wide (initial / early-round) commits. Output
+		// order matches `chunks_exact`, so the interleaving below is unchanged.
+		let encoded_chunks: Vec<Vec<Goldilocks4>> = if codeword_len >= PAR_THRESHOLD {
+			input
+				.par_chunks_exact(chunk_size)
+				.map(|chunk| self.inner_code.encode(chunk))
+				.collect()
+		} else {
+			input
+				.chunks_exact(chunk_size)
+				.map(|chunk| self.inner_code.encode(chunk))
+				.collect()
+		};
 
 		let mut flat: Vec<Goldilocks4> = Vec::with_capacity(codeword_len * k_int);
 		for i in 0..codeword_len {

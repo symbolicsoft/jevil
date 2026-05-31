@@ -19,6 +19,7 @@ p3-field      = "0.5"
 p3-goldilocks = "0.5"
 p3-poseidon2  = "0.5"
 p3-symmetric  = "0.5"
+rayon         = "1"
 shake         = "0.1"
 spongefish    = { version = "0.7", features = ["ark-ff", "derive"] }
 rand          = "0.10"

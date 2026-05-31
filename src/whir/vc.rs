@@ -7,11 +7,12 @@
 //! *internal node* is the hash of its two children. See [`crate::merkle`] for
 //! the tree primitive itself.
 
+use rayon::prelude::*;
 use spongefish::{Encoding, NargDeserialize};
 
 use crate::field::Goldilocks4;
 use crate::hash::hash_vc_leaf;
-use crate::merkle::MerkleTree;
+use crate::merkle::{MerkleTree, PAR_THRESHOLD};
 
 /// An opened-position bundle for a vector commitment.
 #[derive(spongefish::Encoding, spongefish::NargDeserialize)]
@@ -89,7 +90,17 @@ impl MerkleVc {
 			slab.positions(),
 			self.n
 		);
-		let leaf_hashes: Vec<[u8; 32]> = slab.iter_positions().map(hash_vc_leaf).collect();
+		// Leaf hashes are independent; parallelise the wide initial/early-round
+		// commits. `par_chunks_exact` is order-preserving, so leaf `i` keeps
+		// position `i` and the resulting root is identical to the serial path.
+		let leaf_hashes: Vec<[u8; 32]> = if slab.positions() >= PAR_THRESHOLD {
+			slab.data
+				.par_chunks_exact(slab.width)
+				.map(hash_vc_leaf)
+				.collect()
+		} else {
+			slab.iter_positions().map(hash_vc_leaf).collect()
+		};
 		let tree = MerkleTree::build_from_hashes(leaf_hashes);
 		let root = tree.root();
 		(root, (tree, slab))

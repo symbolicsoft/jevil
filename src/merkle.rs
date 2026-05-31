@@ -12,7 +12,15 @@
 //! [`crate::hash::hash_vc_node`]. Cross-mode collisions are bounded in the
 //! random-oracle model by the H_VC capacity.
 
+use rayon::prelude::*;
+
 use crate::hash::hash_vc_node;
+
+/// Minimum element count at which a hashing pass switches from serial to a
+/// rayon parallel iterator. Below this, the work is too small to outweigh the
+/// split/join overhead — and `sign` performs many tiny mask-oracle commits
+/// (`m_zk = 1024` and smaller) where that overhead would otherwise dominate.
+pub(crate) const PAR_THRESHOLD: usize = 256;
 
 /// A binary Merkle tree over pre-hashed leaves.
 ///
@@ -42,10 +50,18 @@ impl MerkleTree {
 		let mut layers = vec![leaf_hashes];
 		while layers.last().unwrap().len() > 1 {
 			let prev = layers.last().unwrap();
-			let next: Vec<[u8; 32]> = prev
-				.chunks(2)
-				.map(|pair| hash_vc_node(&pair[0], &pair[1]))
-				.collect();
+			// Node hashes within a layer are independent; parallelise wide
+			// layers. `par_chunks(2)` is order-preserving, so the tree is
+			// bit-for-bit identical to the serial build.
+			let next: Vec<[u8; 32]> = if prev.len() >= PAR_THRESHOLD {
+				prev.par_chunks(2)
+					.map(|pair| hash_vc_node(&pair[0], &pair[1]))
+					.collect()
+			} else {
+				prev.chunks(2)
+					.map(|pair| hash_vc_node(&pair[0], &pair[1]))
+					.collect()
+			};
 			layers.push(next);
 		}
 		Self { layers }
@@ -191,6 +207,42 @@ mod tests {
 				x
 			})
 			.collect()
+	}
+
+	/// `n` pairwise-distinct leaf hashes (first two bytes carry `i` as LE u16),
+	/// so an intra-layer reordering bug actually changes the root.
+	fn distinct_hashes(n: usize) -> Vec<[u8; 32]> {
+		(0..n)
+			.map(|i| {
+				let mut x = [0u8; 32];
+				x[0..2].copy_from_slice(&(i as u16).to_le_bytes());
+				x
+			})
+			.collect()
+	}
+
+	#[test]
+	fn build_root_matches_independent_serial_reference_at_scale() {
+		// Equivalence oracle for the tree build: an independent dead-simple
+		// serial pair-hash loop must produce the same root as
+		// `build_from_hashes`, at a size large enough that a parallel build
+		// splits work across threads. Distinct leaves mean any intra-layer
+		// reordering changes the root. This guards the parallelization against
+		// ordering/scale bugs the (n*=3) end-to-end KAT may not exercise.
+		let n = 4096; // power of two → no padding to mirror in the reference
+		let leaves = distinct_hashes(n);
+
+		let mut layer = leaves.clone();
+		while layer.len() > 1 {
+			layer = layer
+				.chunks(2)
+				.map(|p| hash_vc_node(&p[0], &p[1]))
+				.collect();
+		}
+		let expected_root = layer[0];
+
+		let tree = MerkleTree::build_from_hashes(leaves);
+		assert_eq!(tree.root(), expected_root);
 	}
 
 	#[test]
