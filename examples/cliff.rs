@@ -89,27 +89,49 @@ fn main() {
 // Spec-side reference implementations (don't reach into Jevil internals).
 // -----------------------------------------------------------------------------
 
+// O(n^2) Lagrange interpolation in coefficient form. Build the master
+// polynomial P(X) = prod_j (X - x_j) once, then for each i recover
+// L_i(X) = P(X) / (X - x_i) by synthetic division (O(n)) and the denominator
+// d_i = prod_{j != i}(x_i - x_j) = L_i(x_i) by Horner (O(n)). The naive
+// rebuild-from-scratch approach was O(n^3), which dominates the demo at
+// large n_star (M = 4096 points at n* = 255).
 fn lagrange_interpolate(pairs: &[(Goldilocks4, Goldilocks4)]) -> Vec<Goldilocks4> {
 	let n = pairs.len();
-	let mut coeffs = vec![Goldilocks4::ZERO; n];
-	for i in 0..n {
-		let mut num = vec![Goldilocks4::ONE];
-		let mut den = Goldilocks4::ONE;
-		for j in 0..n {
-			if i == j {
-				continue;
-			}
-			let mut next = vec![Goldilocks4::ZERO; num.len() + 1];
-			for (k, c) in num.iter().enumerate() {
-				next[k] -= *c * pairs[j].0;
-				next[k + 1] += *c;
-			}
-			num = next;
-			den *= pairs[i].0 - pairs[j].0;
+	if n == 0 {
+		return Vec::new();
+	}
+
+	// master[0..=n] holds P(X) = prod_j (X - x_j), low coefficient first.
+	let mut master = vec![Goldilocks4::ZERO; n + 1];
+	master[0] = Goldilocks4::ONE;
+	let mut deg = 0usize;
+	for &(x, _) in pairs {
+		deg += 1;
+		// Multiply in place by (X - x): new[k] = old[k-1] - x*old[k],
+		// walking high-to-low so old[k-1] is still intact when read.
+		for k in (0..=deg).rev() {
+			let lower = if k >= 1 { master[k - 1] } else { Goldilocks4::ZERO };
+			master[k] = lower - x * master[k];
 		}
-		let den_inv = den.try_inverse().expect("distinct points");
-		for (k, c) in num.iter().enumerate() {
-			coeffs[k] += pairs[i].1 * *c * den_inv;
+	}
+
+	let mut coeffs = vec![Goldilocks4::ZERO; n];
+	let mut quot = vec![Goldilocks4::ZERO; n]; // reused L_i buffer, degree n-1
+	for &(xi, yi) in pairs {
+		// Synthetic division of P (degree n) by the monic (X - xi); the
+		// remainder is zero since xi is a root, leaving quot = L_i.
+		quot[n - 1] = master[n];
+		for k in (1..n).rev() {
+			quot[k - 1] = master[k] + xi * quot[k];
+		}
+		// d_i = L_i(xi) = prod_{j != i}(xi - x_j), via Horner on quot.
+		let mut den = Goldilocks4::ZERO;
+		for k in (0..n).rev() {
+			den = den * xi + quot[k];
+		}
+		let scale = yi * den.try_inverse().expect("distinct points");
+		for k in 0..n {
+			coeffs[k] += scale * quot[k];
 		}
 	}
 	coeffs
