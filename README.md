@@ -6,6 +6,8 @@
 
 # Jevil
 
+[![CI](https://github.com/symbolicsoft/jevil/actions/workflows/ci.yml/badge.svg)](https://github.com/symbolicsoft/jevil/actions/workflows/ci.yml)
+
 > [!CAUTION]
 > ## ⚠️ EXPERIMENTAL — DO NOT USE IN PRODUCTION ⚠️
 >
