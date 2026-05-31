@@ -456,7 +456,7 @@ impl VerifierCodeswitch {
 		let mut value = constraint.value;
 		let mut forms: Vec<Box<dyn LinearFormHandle<Alphabet = Goldilocks4>>> =
 			vec![Box::new(constraint.linear_form_handle)];
-		let mut coeffs = vec![<Goldilocks4 as effsc::field::SumcheckField>::ONE];
+		let mut coeffs = vec![<Goldilocks4 as crate::field::SumcheckField>::ONE];
 
 		for (i, (answer, ze_constraint)) in ood_answers.into_iter().zip(ze_constraints).enumerate()
 		{
@@ -483,7 +483,7 @@ impl VerifierCodeswitch {
 			super::mask_stack::MaskOracleHandle::verifier_root_only(padding_root);
 		mask_stack.push_padding_mask(
 			padding_mask_handle,
-			<Goldilocks4 as effsc::field::SumcheckField>::ONE,
+			<Goldilocks4 as crate::field::SumcheckField>::ONE,
 			padding_sl_o,
 		);
 		if let Some(last_mc) = mask_stack.constraints.last_mut() {
@@ -501,7 +501,7 @@ impl VerifierCodeswitch {
 					combination_rand: coeffs,
 				}),
 				rand: Vec::new(),
-				scale: <Goldilocks4 as effsc::field::SumcheckField>::ONE,
+				scale: <Goldilocks4 as crate::field::SumcheckField>::ONE,
 			},
 			value: value - mask_carry_in_pre,
 		};
@@ -623,7 +623,7 @@ impl ConcreteWhirVerifier {
 			linear_form_handle: FoldedFormHandle {
 				linear_form_handle: Box::new(embedded),
 				rand: Vec::new(),
-				scale: <Goldilocks4 as effsc::field::SumcheckField>::ONE,
+				scale: <Goldilocks4 as crate::field::SumcheckField>::ONE,
 			},
 			value,
 		};

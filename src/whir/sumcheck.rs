@@ -17,7 +17,7 @@
 
 use spongefish::{ProverState, VerificationError, VerificationResult, VerifierState};
 
-use effsc::field::SumcheckField;
+use crate::field::SumcheckField;
 
 use super::code::{Field as WhirField, InterleavedCode, LinearCode};
 use super::commitment::{
@@ -53,7 +53,7 @@ where
 }
 
 /// Compute `(q(0), q(∞))` for the inner-product sumcheck round on `(a, b)`.
-fn round_poly<F: effsc::field::SumcheckField>(a: &[F], b: &[F]) -> (F, F) {
+fn round_poly<F: crate::field::SumcheckField>(a: &[F], b: &[F]) -> (F, F) {
 	let n = a.len();
 	if n <= 1 {
 		let v = if n == 1 { a[0] * b[0] } else { F::ZERO };
@@ -119,7 +119,7 @@ pub(crate) fn prove_sumcheck<EC, VC>(
 )
 where
 	EC: LinearCode,
-	EC::Alphabet: effsc::field::SumcheckField,
+	EC::Alphabet: crate::field::SumcheckField,
 	VC: VectorCommitment<Alphabet = Vec<EC::OutputAlphabet>>,
 {
 	let interleaving = input.code.interleaving_factor();
@@ -383,7 +383,7 @@ pub(crate) fn verify_sumcheck_zk(
 
 /// `eval_01(p) = p(0) + p(1)` for a length-`HVZK_MASK_LENGTH` univariate
 /// polynomial `p` given by coefficients `(p[0], p[1], p[2])`.
-fn eval_01<F: effsc::field::SumcheckField>(coeffs: &[F]) -> F {
+fn eval_01<F: crate::field::SumcheckField>(coeffs: &[F]) -> F {
 	if coeffs.is_empty() {
 		return F::ZERO;
 	}
@@ -396,7 +396,7 @@ fn eval_01<F: effsc::field::SumcheckField>(coeffs: &[F]) -> F {
 }
 
 /// Compute `2^n` as a field element by repeated doubling.
-fn pow2<F: effsc::field::SumcheckField>(n: usize) -> F {
+fn pow2<F: crate::field::SumcheckField>(n: usize) -> F {
 	let mut acc = F::ONE;
 	for _ in 0..n {
 		acc = acc.double();

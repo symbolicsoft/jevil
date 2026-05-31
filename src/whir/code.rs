@@ -13,7 +13,7 @@
 
 use core::marker::PhantomData;
 
-use effsc::field::SumcheckField;
+use crate::field::SumcheckField;
 use spongefish::{Decoding, Encoding, NargDeserialize, NargSerialize};
 
 use crate::field::Goldilocks4;

@@ -13,7 +13,7 @@
 
 use core::ops::{Add, AddAssign, Mul};
 
-use effsc::field::SumcheckField;
+use crate::field::SumcheckField;
 
 use super::code::Field;
 

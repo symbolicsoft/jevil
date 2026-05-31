@@ -22,10 +22,11 @@
 //! - [`psi`]: the position-to-field map `ψ_T(i) = g_T^i` used to convert
 //!   sampled positions into evaluation points.
 //! - Adapter implementations of [`spongefish::Encoding`],
-//!   [`spongefish::Decoding`], [`spongefish::NargDeserialize`], and
-//!   [`effsc::field::SumcheckField`] so that `Goldilocks4` plugs directly into
-//!   the WHIR and sumcheck machinery.
+//!   [`spongefish::Decoding`], [`spongefish::NargDeserialize`], and the local
+//!   [`SumcheckField`] trait so that `Goldilocks4` plugs directly into the
+//!   WHIR and sumcheck machinery.
 
+use core::fmt::Debug;
 use core::iter::Sum;
 use core::ops::{Add, AddAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 use std::sync::OnceLock;
@@ -400,36 +401,54 @@ impl NargDeserialize for Goldilocks4 {
 }
 
 // ---------------------------------------------------------------------------
-// effsc::SumcheckField
+// SumcheckField
 // ---------------------------------------------------------------------------
 
-impl effsc::field::SumcheckField for Goldilocks4 {
+/// Minimum field interface required by the WHIR sumcheck machinery.
+///
+/// This is the small arithmetic surface the generic code in [`crate::whir`]
+/// is written against: the two distinguished constants, a multiplicative
+/// inverse, and additive doubling, on top of the standard operator traits.
+pub trait SumcheckField:
+	Sized
+	+ Copy
+	+ Send
+	+ Sync
+	+ PartialEq
+	+ Debug
+	+ Add<Output = Self>
+	+ Sub<Output = Self>
+	+ Mul<Output = Self>
+	+ Neg<Output = Self>
+	+ AddAssign
+	+ SubAssign
+	+ MulAssign
+	+ Sum
+	+ 'static
+{
+	/// Additive identity.
+	const ZERO: Self;
+
+	/// Multiplicative identity.
+	const ONE: Self;
+
+	/// Multiplicative inverse, or `None` for zero.
+	fn inverse(&self) -> Option<Self>;
+
+	/// Double this element (additive).
+	#[inline]
+	fn double(&self) -> Self {
+		*self + *self
+	}
+}
+
+impl SumcheckField for Goldilocks4 {
 	const ZERO: Self = Goldilocks4::ZERO;
 	const ONE: Self = Goldilocks4::ONE;
 
 	#[inline]
-	fn from_u64(val: u64) -> Self {
-		Goldilocks4::new([
-			Goldilocks::new(val % Q0),
-			Goldilocks::new(0),
-			Goldilocks::new(0),
-			Goldilocks::new(0),
-		])
-	}
-
-	#[inline]
 	fn inverse(&self) -> Option<Self> {
 		self.try_inverse()
-	}
-
-	#[inline]
-	fn is_zero(&self) -> bool {
-		Goldilocks4::is_zero(self)
-	}
-
-	#[inline]
-	fn extension_degree() -> u64 {
-		4
 	}
 }
 
