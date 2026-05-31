@@ -1,3 +1,9 @@
+<div align="center">
+  <img src="assets/jevil.png" alt="Jevil logo" width="200">
+  <br>
+  <sub>Logo by Ela Bambust</sub>
+</div>
+
 # Jevil
 
 > [!CAUTION]
