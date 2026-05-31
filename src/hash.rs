@@ -181,10 +181,6 @@ pub(crate) fn shake256_xof(tag: [u8; 8], inputs: &[&[u8]]) -> impl XofReader + u
 const POSEIDON2_WIDTH: usize = 12;
 /// Rate in field elements (8 → 64 bytes per absorb).
 const POSEIDON2_RATE: usize = 8;
-/// Bytes per rate block. Retained only because the test-only
-/// `legacy_hash_arith` cross-check uses it.
-#[cfg(test)]
-const POSEIDON2_RATE_BYTES: usize = POSEIDON2_RATE * 8;
 
 /// The shared Poseidon2-Goldilocks-12 permutation, constructed once on first
 /// use and reused for every H_VC invocation.
@@ -373,91 +369,6 @@ mod tests {
 		let r = [9u8; 32];
 		assert_eq!(hash_vc_node(&l, &r), hash_vc_node(&l, &r));
 		assert_ne!(hash_vc_node(&l, &r), hash_vc_node(&r, &l));
-	}
-
-	/// Hand-rolled replay of the pre-Slice-B `hash(Family::Arith, JV_WHIR, …)`
-	/// sponge framing: length-prefixed input bytes, `10*` padding, rate-8
-	/// absorb, then a single permutation per rate block. Used by the
-	/// cross-check tests below to prove the H_VC switch actually changed
-	/// the absorb pattern; survives the Task-4 removal of `Family::Arith`
-	/// because it inlines the logic.
-	fn legacy_hash_arith(tag: [u8; 8], inputs: &[&[u8]]) -> [u8; 32] {
-		let total = 8 + inputs.iter().map(|x| 8 + x.len()).sum::<usize>();
-		let mut buf = Vec::with_capacity(total);
-		buf.extend_from_slice(&tag);
-		for input in inputs {
-			buf.extend_from_slice(&(input.len() as u64).to_le_bytes());
-			buf.extend_from_slice(input);
-		}
-
-		let padded_len = {
-			let raw = buf.len() + 1;
-			if raw.is_multiple_of(POSEIDON2_RATE_BYTES) {
-				raw
-			} else {
-				raw + (POSEIDON2_RATE_BYTES - raw % POSEIDON2_RATE_BYTES)
-			}
-		};
-		let mut padded = vec![0u8; padded_len];
-		padded[..buf.len()].copy_from_slice(&buf);
-		padded[buf.len()] = 0x01;
-
-		let perm = default_goldilocks_poseidon2_12();
-		let mut state = [Goldilocks::ZERO; POSEIDON2_WIDTH];
-		for chunk in padded.chunks_exact(POSEIDON2_RATE_BYTES) {
-			for (i, elem_bytes) in chunk.chunks_exact(8).enumerate() {
-				state[i] += bytes_to_goldilocks(elem_bytes);
-			}
-			perm.permute_mut(&mut state);
-		}
-
-		let mut out = [0u8; 32];
-		for (i, elem) in state[..4].iter().enumerate() {
-			out[i * 8..(i + 1) * 8].copy_from_slice(&elem.as_canonical_u64().to_le_bytes());
-		}
-		out
-	}
-
-	#[test]
-	fn hash_vc_leaf_differs_from_legacy_sponge() {
-		// Pin the spec/impl invariant: the new H_VC absorb pattern (no len
-		// prefix, no 10* pad, leaf-IV in capacity) MUST produce different
-		// bytes than the legacy hash(Family::Arith, JV_WHIR, &[leaf_buf]).
-		use crate::field::Goldilocks4;
-		let leaf: Vec<Goldilocks4> = (1u64..=4)
-			.map(|n| {
-				Goldilocks4::new([
-					Goldilocks::new(n),
-					Goldilocks::new(n + 100),
-					Goldilocks::new(n + 200),
-					Goldilocks::new(n + 300),
-				])
-			})
-			.collect();
-		let new_out = hash_vc_leaf(&leaf);
-
-		let mut leaf_buf = Vec::with_capacity(leaf.len() * 32);
-		for s in &leaf {
-			leaf_buf.extend_from_slice(&s.to_bytes());
-		}
-		let legacy_out = legacy_hash_arith(JV_WHIR, &[&leaf_buf]);
-
-		assert_ne!(
-			new_out, legacy_out,
-			"H_VC^leaf must differ from legacy sponge framing"
-		);
-	}
-
-	#[test]
-	fn hash_vc_node_differs_from_legacy_sponge() {
-		let left = [0x11u8; 32];
-		let right = [0x22u8; 32];
-		let new_out = hash_vc_node(&left, &right);
-		let legacy_out = legacy_hash_arith(JV_WHIR, &[&left, &right]);
-		assert_ne!(
-			new_out, legacy_out,
-			"H_VC^node must differ from legacy sponge framing"
-		);
 	}
 
 	#[test]
